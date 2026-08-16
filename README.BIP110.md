@@ -30,9 +30,10 @@ Mirrored into `src/datum_pow_v2.c` / `src/datum_pow_v2.h` so DATUM can build the
 
 - TaggedHash tags / field order (header 1, merge-mining hook, XOR key/mask)
 - Mid = Blake2b-256 over host stream
-- 80-byte ASIC region + profiles (`reserved & 3`)
+- 80-byte ASIC region + profiles (`m_flags & 3`)
 - Final digest order + mask
 - 164-byte V2 header serialization
+- **@ 9228db:** `m_time_offset` + `m_nonce3` as u32; h1 uses `GetTimeOnWire()`; flag `UseTimeOffset` (bit 2)
 
 This is **not** a full copy of the Bitcoin tree — only what the template/host needs to match PR #359.
 
@@ -59,8 +60,9 @@ So a **frozen Sia-class** Blake2b miner (GPU/ASIC-style 80B grind) can be pointe
 mining.notify:
   [job_id, prev_hex, mid_hex, "", [], version, nbits, ntime8_hex, clean]
 
-header80 (profile 0):
-  prev32 || nonce8_le || ntime8_le || mid32
+header80 (profile 0 @ 9228db):
+  prev32 || nNonce || nNonce2 || time_offset || nNonce3 || mid32
+  (Sia-class: nonce8_le = nNonce|nNonce2, ntime8_le = time_offset|nNonce3)
 
 mining.submit:
   [user, job_id, extranonce2, ntime8_hex, nonce8_hex]
@@ -97,15 +99,18 @@ Any change to GetHash field order, tags, ASIC profiles, mask/XOR rules, header w
 Freeze reference when last aligned:
 
 ```text
-luke-jr/bitcoin  pow_hf_blake2b  @ 9228db6994  (nonce3/time-offset update)
+luke-jr/bitcoin  pow_hf_blake2b  @ 9228db6994
+  "Turn part of nonce3 into a time offset" (nTime rolling)
+
+Why this re-port (2026-08-16):
+  - Former m_nonce3 u64 split into m_time_offset u32 + m_nonce3 u32
+  - ASIC stream profile 0/1 reorder to include time_offset
+  - h1 embeds GetTimeOnWire() so UseTimeOffset mid depends on offset
+  - Wire header SERIALIZE_METHODS writes time_on_wire + time_offset field
+  - Lab Sia ntime8 maps to time_offset||nNonce3 (usually zeros; grind nonce8)
+  - datum_pow_v2 + unit tests + stratum hooks re-aligned to this tip
 
 Mirror fork for tracking: https://github.com/Maveth/bitcoin-pow-hf-blake2b (branch pow_hf_blake2b)
-
-**2026-08-16 PR change (must re-align DATUM host pack):**
-- Part of former `m_nonce3` became `m_time_offset` (miner-side time rolling)
-- `m_nonce3` is now u32; ASIC stream includes `m_time_offset`
-- h1 uses `GetTimeOnWire()` when flag `UseTimeOffset` set
-- DATUM `datum_pow_v2` / Sia ntime8 mapping still matches **pre-9228db** profile-0 until re-ported
 ```
 
 ---
@@ -162,14 +167,3 @@ make -j$(nproc)
 Lab-proven on private regtest against a Blake2b PR node: share accept + tip advance via `submitblock`. Pool protocol V2 fields and the official miner dialect may still evolve.
 
 **For reviewers:** start with this file, then `src/datum_pow_v2.*`, then the `bip110_pow_v2` conditionals in `datum_stratum.c`.
-
-## Unit tests
-
-Host math tests (Blake2b vectors + fixed GetHash-style job + Sia nonce map + profile 1 layout):
-
-```bash
-# after build
-./datum_gateway --test
-```
-
-Runs existing DATUM tests plus `datum_pow_v2_tests`. Exit non-zero on failure. Re-generate vectors if PR #359 GetHash changes.

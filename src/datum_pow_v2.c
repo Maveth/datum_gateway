@@ -1,30 +1,13 @@
 /*
  * datum_pow_v2.c — Blake2b V2 host construction (DATUM side)
  *
- * Port of Knots PR #359 GetHash host path for use while DATUM builds templates
- * and packs miner work. Consensus validity remains on the node.
+ * Port of Knots PR #359 GetHash for template build + miner pack + submitblock.
+ * Aligned to pow_hf_blake2b @ 9228db6994 (time-offset / nTime rolling).
  *
- * Upstream reference (freeze / re-diff when the PR moves):
- *   https://github.com/bitcoinknots/bitcoin/pull/359
- *   CBlockHeader::GetHash, V2 SERIALIZE_METHODS, ASIC profiles (m_reserved&3)
- *
- * -------------------------------------------------------------------------
- * NETWORK DIFFICULTY (placeholder — do not reimplement retarget here)
- * -------------------------------------------------------------------------
- * Compact nBits on jobs come from bitcoind GBT. The node owns:
- *   - GetNextWorkRequired / CalculateNextWorkRequired
- *   - ApplyBlake2bTargetShift on first DEPLOYMENT_BLAKE2B height
- *     (see bitcoin/src/pow.cpp in pow_hf_blake2b)
- *   - CheckPoW against final Blake2b digest
- *
- * DATUM must:
- *   - Pass through template nBits as job nBits / block_target
- *   - Score shares with Blake2b final vs share target and block target
- *   - NOT invent a parallel retarget
- *
- * When the PR changes Blake2bTargetShift, powLimit, or retarget rules,
- * update node first; DATUM only needs re-test (and any share-diff policy).
- * -------------------------------------------------------------------------
+ * When the PR moves, re-diff:
+ *   src/primitives/block.cpp  CBlockHeader::GetHash
+ *   src/primitives/block.h    CompressedHeader + SERIALIZE_METHODS
+ *   src/pow.cpp               Blake2bTargetShift / GetNextWorkRequired
  */
 
 #include "datum_pow_v2.h"
@@ -36,8 +19,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ---- little-endian helpers ------------------------------------------------ */
-
 static void write_u32_le(uint8_t *p, uint32_t v)
 {
 	p[0] = (uint8_t)(v & 0xff);
@@ -46,19 +27,10 @@ static void write_u32_le(uint8_t *p, uint32_t v)
 	p[3] = (uint8_t)((v >> 24) & 0xff);
 }
 
-static void write_u64_le(uint8_t *p, uint64_t v)
-{
-	for (int i = 0; i < 8; i++) {
-		p[i] = (uint8_t)((v >> (8 * i)) & 0xff);
-	}
-}
-
 static void write_i32_le(uint8_t *p, int32_t v)
 {
 	write_u32_le(p, (uint32_t)v);
 }
-
-/* ---- crypto primitives (match Core TaggedHash + Blake2b-256) -------------- */
 
 static void tagged_sha256(const char *tag, const uint8_t *msg, size_t msg_len, uint8_t out[32])
 {
@@ -69,7 +41,6 @@ static void tagged_sha256(const char *tag, const uint8_t *msg, size_t msg_len, u
 	int heap = 0;
 
 	my_sha256(tag_digest, (const unsigned char *)tag, strlen(tag));
-
 	if (total > sizeof(stack_buf)) {
 		buf = (uint8_t *)malloc(total);
 		if (!buf) {
@@ -78,7 +49,6 @@ static void tagged_sha256(const char *tag, const uint8_t *msg, size_t msg_len, u
 		}
 		heap = 1;
 	}
-
 	memcpy(buf, tag_digest, 32);
 	memcpy(buf + 32, tag_digest, 32);
 	if (msg_len) {
@@ -95,7 +65,16 @@ static void blake2b_256(const uint8_t *in, size_t inlen, uint8_t out[32])
 	crypto_generichash_blake2b(out, 32, in, inlen, NULL, 0);
 }
 
-/* ---- public helpers ------------------------------------------------------- */
+uint32_t datum_pow_v2_time_on_wire(const datum_pow_v2_job *j)
+{
+	if (!j) {
+		return 0;
+	}
+	if ((j->flags & DATUM_POW_V2_FLAG_USE_TIME_OFFSET) == 0) {
+		return j->nTime;
+	}
+	return j->nTime - j->time_offset;
+}
 
 void datum_pow_v2_bin_to_hex32(const uint8_t in[32], char out[65])
 {
@@ -111,7 +90,6 @@ uint64_t datum_pow_v2_parse_hex_le_u64(const char *hex)
 {
 	size_t n;
 	uint64_t v = 0;
-	size_t nbytes;
 	size_t i;
 
 	if (!hex) {
@@ -121,7 +99,6 @@ uint64_t datum_pow_v2_parse_hex_le_u64(const char *hex)
 	if (n == 0) {
 		return 0;
 	}
-	/* 16 hex chars = 8 LE bytes (Sia-class). Else classic Stratum integer hex. */
 	if (n == 16) {
 		for (i = 0; i < 8; i++) {
 			unsigned int b = 0;
@@ -135,8 +112,6 @@ uint64_t datum_pow_v2_parse_hex_le_u64(const char *hex)
 	return (uint64_t)strtoull(hex, NULL, 16);
 }
 
-/* ---- GetHash host path (PR #359) ------------------------------------------ */
-
 bool datum_pow_v2_build(datum_pow_v2_job *j)
 {
 	uint8_t xor_key_hash[32];
@@ -146,8 +121,8 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	uint8_t h2[32];
 	uint8_t mid_ss[52];
 	size_t o;
-	int xor_null;
 	unsigned int i;
+	int xor_null;
 
 	if (!j) {
 		return false;
@@ -156,10 +131,8 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 		return false;
 	}
 
-	/* xor_key_hash = TaggedHash("…XOR key" || xor_key) */
 	tagged_sha256("Bitcoin block hash PoW XOR key", j->xor_key, 16, xor_key_hash);
 
-	/* mask: null key → zeros; else TaggedHash mask tag, then clear_bits */
 	memset(j->mask, 0, 32);
 	xor_null = 1;
 	for (i = 0; i < 16; i++) {
@@ -169,11 +142,9 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 		}
 	}
 	if (!xor_null) {
-		unsigned int clear_bytes;
-		unsigned int rem;
+		unsigned int clear_bytes = (unsigned int)j->clear_bits / 8;
+		unsigned int rem = (unsigned int)j->clear_bits % 8;
 		tagged_sha256("Bitcoin block hash PoW XOR mask", j->xor_key, 16, j->mask);
-		clear_bytes = (unsigned int)j->clear_bits / 8;
-		rem = (unsigned int)j->clear_bits % 8;
 		if (clear_bytes > 32) {
 			clear_bytes = 32;
 		}
@@ -183,11 +154,7 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 		}
 	}
 
-	/*
-	 * h1 user payload: 90 bytes (PR assert was fixed 88→90).
-	 * version, merkle, height, nTime, 0 (time hi), nBits, txcount u32,
-	 * reserved u8, clear_bits u8, xor_key_hash
-	 */
+	/* h1: uses GetTimeOnWire() (PR 9228db) */
 	o = 0;
 	write_u32_le(h1msg + o, (uint32_t)j->nVersion);
 	o += 4;
@@ -195,7 +162,7 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	o += 32;
 	write_u32_le(h1msg + o, (uint32_t)j->height);
 	o += 4;
-	write_u32_le(h1msg + o, j->nTime);
+	write_u32_le(h1msg + o, datum_pow_v2_time_on_wire(j));
 	o += 4;
 	write_u32_le(h1msg + o, 0);
 	o += 4;
@@ -203,7 +170,7 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	o += 4;
 	write_u32_le(h1msg + o, (uint32_t)j->txcount);
 	o += 4;
-	h1msg[o++] = j->reserved;
+	h1msg[o++] = j->flags;
 	h1msg[o++] = j->clear_bits;
 	memcpy(h1msg + o, xor_key_hash, 32);
 	o += 32;
@@ -216,7 +183,6 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	memcpy(h2msg + 32, j->mm_rhs, 32);
 	tagged_sha256("Merge-mining hook", h2msg, 64, h2);
 
-	/* mid = Blake2b-256( u32le(0) || h2 || extranonce16 ) */
 	write_u32_le(mid_ss, 0);
 	memcpy(mid_ss + 4, h2, 32);
 	memcpy(mid_ss + 36, j->extranonce, 16);
@@ -234,31 +200,31 @@ bool datum_pow_v2_set_nonce(datum_pow_v2_job *j, uint32_t nnonce)
 		return false;
 	}
 	j->nNonce = nnonce;
-	profile = j->reserved & 3;
+	profile = j->flags & 3;
 	a = j->asic80;
 
 	/*
-	 * ASIC profiles from PR (m_reserved & 3):
-	 *   0: prev || nNonce || nNonce2 || nNonce3 || mid
-	 *   1: nNonce || nNonce2 || nNonce3 || mid || prev
+	 * ASIC stream (PR 9228db):
+	 *   case 0: prev || nNonce || nNonce2 || time_offset || nNonce3 || mid
+	 *   case 1: nNonce || nNonce2 || nNonce3 || time_offset || mid || prev
 	 */
 	if (profile == 1) {
 		write_u32_le(a + 0, j->nNonce);
 		write_u32_le(a + 4, j->nNonce2);
-		write_u64_le(a + 8, j->nNonce3);
+		write_u32_le(a + 8, j->nNonce3);
+		write_u32_le(a + 12, j->time_offset);
 		memcpy(a + 16, j->mid, 32);
 		memcpy(a + 48, j->prev, 32);
 	} else {
 		memcpy(a + 0, j->prev, 32);
 		write_u32_le(a + 32, j->nNonce);
 		write_u32_le(a + 36, j->nNonce2);
-		write_u64_le(a + 40, j->nNonce3);
+		write_u32_le(a + 40, j->time_offset);
+		write_u32_le(a + 44, j->nNonce3);
 		memcpy(a + 48, j->mid, 32);
 	}
 
 	blake2b_256(j->asic80, 80, j->raw_blake);
-
-	/* final[31-i] = raw[i] ^ mask[i]  (uint256 storage / CheckPoW order) */
 	for (int i = 0; i < 32; i++) {
 		j->final_hash[31 - i] = (uint8_t)(j->raw_blake[i] ^ j->mask[i]);
 	}
@@ -268,36 +234,54 @@ bool datum_pow_v2_set_nonce(datum_pow_v2_job *j, uint32_t nnonce)
 bool datum_pow_v2_set_sia_nonces(datum_pow_v2_job *j, uint64_t nonce8_le, uint64_t ntime8_le)
 {
 	/*
-	 * Miner-facing Sia-class 80B (profile 0):
-	 *   prev32 | nonce8 | ntime8 | mid32
-	 * Maps to Luke: nNonce|nNonce2, nNonce3, mid.
+	 * Miner-facing Sia-class layout stays 80B:
+	 *   prev | nonce8 | ntime8 | mid
+	 * After 9228db, ntime8 packs: time_offset (u32 LE) || nNonce3 (u32 LE)
+	 * so the ASIC can roll time as an offset without seeing host nTime.
+	 *
+	 * If UseTimeOffset is set, mid depends on GetTimeOnWire — host must
+	 * rebuild mid when offset changes (call build after setting offset).
 	 */
 	if (!j) {
 		return false;
 	}
 	j->nNonce = (uint32_t)(nonce8_le & 0xffffffffu);
 	j->nNonce2 = (uint32_t)((nonce8_le >> 32) & 0xffffffffu);
-	j->nNonce3 = ntime8_le;
+	j->time_offset = (uint32_t)(ntime8_le & 0xffffffffu);
+	j->nNonce3 = (uint32_t)((ntime8_le >> 32) & 0xffffffffu);
+
+	if (j->flags & DATUM_POW_V2_FLAG_USE_TIME_OFFSET) {
+		/* mid includes GetTimeOnWire — recompute host mid before asic */
+		return datum_pow_v2_build(j);
+	}
 	return datum_pow_v2_set_nonce(j, j->nNonce);
 }
 
 int datum_pow_v2_header(const datum_pow_v2_job *j, uint8_t out[164])
 {
 	uint32_t v;
+	uint32_t time_on_wire;
 	size_t o = 0;
 
 	if (!j || !out) {
 		return -1;
 	}
 
+	/*
+	 * Wire: version|v2flag, prev, merkle, time_on_wire, nBits, nNonce,
+	 * then V2: nonce2, nonce3, extranonce, time_offset, txcount, flags,
+	 * clear_bits, xor_key, height, mm_rhs
+	 */
 	v = 0x80000000u | ((uint32_t)j->nVersion & 0x7fffffffu);
+	time_on_wire = datum_pow_v2_time_on_wire(j);
+
 	write_u32_le(out + o, v);
 	o += 4;
 	memcpy(out + o, j->prev, 32);
 	o += 32;
 	memcpy(out + o, j->merkle, 32);
 	o += 32;
-	write_u32_le(out + o, j->nTime);
+	write_u32_le(out + o, time_on_wire);
 	o += 4;
 	write_u32_le(out + o, j->nBits);
 	o += 4;
@@ -305,13 +289,15 @@ int datum_pow_v2_header(const datum_pow_v2_job *j, uint8_t out[164])
 	o += 4;
 	write_u32_le(out + o, j->nNonce2);
 	o += 4;
-	write_u64_le(out + o, j->nNonce3);
-	o += 8;
+	write_u32_le(out + o, j->nNonce3);
+	o += 4;
 	memcpy(out + o, j->extranonce, 16);
 	o += 16;
+	write_u32_le(out + o, j->time_offset);
+	o += 4;
 	out[o++] = (uint8_t)(j->txcount & 0xff);
 	out[o++] = (uint8_t)((j->txcount >> 8) & 0xff);
-	out[o++] = j->reserved;
+	out[o++] = j->flags;
 	out[o++] = j->clear_bits;
 	memcpy(out + o, j->xor_key, 16);
 	o += 16;

@@ -1232,7 +1232,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 			v2.txcount = job->pow_v2_txcount
 			                 ? job->pow_v2_txcount
 			                 : (empty_work ? 1 : (uint16_t)(job->block_template->txn_count + 1));
-			v2.reserved = job->pow_v2_reserved;
+			v2.flags = job->pow_v2_reserved; /* m_flags */
 			v2.clear_bits = job->pow_v2_clear_bits;
 			memcpy(v2.extranonce, job->pow_v2_extranonce, 16);
 			memcpy(v2.xor_key, job->pow_v2_xor_key, 16);
@@ -2177,7 +2177,7 @@ static void bip110_pow_v2_fill_job(T_DATUM_STRATUM_JOB *s)
 		}
 	}
 	v2.txcount = (uint16_t)tc;
-	v2.reserved = 0; /* ASIC profile 0 — update if PR profiles change */
+	v2.flags = 0; /* profile 0; bit2 UseTimeOffset off (lab) */
 	v2.clear_bits = 0;
 	memset(v2.extranonce, 0, 16);
 	v2.extranonce[0] = (uint8_t)(s->enprefix & 0xff);
@@ -2195,7 +2195,7 @@ static void bip110_pow_v2_fill_job(T_DATUM_STRATUM_JOB *s)
 	memcpy(s->pow_v2_extranonce, v2.extranonce, 16);
 	memcpy(s->pow_v2_xor_key, v2.xor_key, 16);
 	memcpy(s->pow_v2_mm_rhs, v2.mm_rhs, 32);
-	s->pow_v2_reserved = v2.reserved;
+	s->pow_v2_reserved = v2.flags; /* m_flags */
 	s->pow_v2_clear_bits = v2.clear_bits;
 	s->pow_v2_txcount = v2.txcount;
 	/* ntime8 slot = nNonce3; lab default zero (miner may grind nonce8 only) */
