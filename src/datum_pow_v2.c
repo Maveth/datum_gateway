@@ -2,12 +2,13 @@
  * datum_pow_v2.c — Blake2b V2 host construction (DATUM side)
  *
  * Port of Knots PR #359 GetHash for template build + miner pack + submitblock.
- * Aligned to pow_hf_blake2b @ 9228db6994 (time-offset / nTime rolling).
+ * Aligned to pow_hf_blake2b @ 0d7a5e74b6 (time-offset + ReversedBytes prev on ASIC).
  *
  * When the PR moves, re-diff:
  *   src/primitives/block.cpp  CBlockHeader::GetHash
  *   src/primitives/block.h    CompressedHeader + SERIALIZE_METHODS
  *   src/pow.cpp               Blake2bTargetShift / GetNextWorkRequired
+ *   src/test/data/block_header_v2.json
  */
 
 #include "datum_pow_v2.h"
@@ -195,6 +196,8 @@ bool datum_pow_v2_set_nonce(datum_pow_v2_job *j, uint32_t nnonce)
 {
 	int profile;
 	uint8_t *a;
+	uint8_t prev_asic[32];
+	int i;
 
 	if (!j) {
 		return false;
@@ -204,19 +207,27 @@ bool datum_pow_v2_set_nonce(datum_pow_v2_job *j, uint32_t nnonce)
 	a = j->asic80;
 
 	/*
-	 * ASIC stream (PR 9228db):
-	 *   case 0: prev || nNonce || nNonce2 || time_offset || nNonce3 || mid
-	 *   case 1: nNonce || nNonce2 || nNonce3 || time_offset || mid || prev
+	 * GetHash @ 0d7a5e: ASIC stream uses hashPrevBlock.ReversedBytes().
+	 * j->prev is header-wire / uint256 internal order (SERIALIZE_METHODS).
+	 *
+	 * Lab Sia pack uses profile 0/1 80B only. Profiles 2/3 use longer
+	 * zero-padded streams in the node; we still hash the 80B core here for
+	 * the miner dialect (flags low2 should be 0 or 1 in lab).
 	 */
+	for (i = 0; i < 32; i++) {
+		prev_asic[i] = j->prev[31 - i];
+	}
+
 	if (profile == 1) {
 		write_u32_le(a + 0, j->nNonce);
 		write_u32_le(a + 4, j->nNonce2);
 		write_u32_le(a + 8, j->nNonce3);
 		write_u32_le(a + 12, j->time_offset);
 		memcpy(a + 16, j->mid, 32);
-		memcpy(a + 48, j->prev, 32);
+		memcpy(a + 48, prev_asic, 32);
 	} else {
-		memcpy(a + 0, j->prev, 32);
+		/* profile 0 (and 2/3 core) */
+		memcpy(a + 0, prev_asic, 32);
 		write_u32_le(a + 32, j->nNonce);
 		write_u32_le(a + 36, j->nNonce2);
 		write_u32_le(a + 40, j->time_offset);
@@ -225,7 +236,7 @@ bool datum_pow_v2_set_nonce(datum_pow_v2_job *j, uint32_t nnonce)
 	}
 
 	blake2b_256(j->asic80, 80, j->raw_blake);
-	for (int i = 0; i < 32; i++) {
+	for (i = 0; i < 32; i++) {
 		j->final_hash[31 - i] = (uint8_t)(j->raw_blake[i] ^ j->mask[i]);
 	}
 	return true;

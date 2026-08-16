@@ -93,19 +93,19 @@ static void test_host_job_fixed_vector(void)
 		datum_test(j.mask[i] == 0);
 	}
 
+	/* @ 0d7a5e: ASIC uses ReversedBytes(prev) — prev was ...01 → asic starts 01 00.. */
 	datum_test(parse_hex(
-	               "0a8169fb9859778f7b6576a1dfaf7ed58874f3985378d54274124e1473ec1bf3",
+	               "228118b724822e68677c87b3268563963a2d656f72d1a869fbb793d662423d5e",
 	               expect_raw, 32) == 0);
 	datum_test(memcmp(j.raw_blake, expect_raw, 32) == 0);
 
 	datum_test(parse_hex(
-	               "f31bec73144e127442d5785398f37488d57eafdfa176657b8f775998fb69810a",
+	               "5e3d4262d693b7fb69a8d1726f652d3a96638526b3877c67682e8224b7188122",
 	               expect_final, 32) == 0);
 	datum_test(memcmp(j.final_hash, expect_final, 32) == 0);
 
-	/* zero nonces + zero time_offset: asic80 same as pre-9228db zero nNonce3 */
 	datum_test(parse_hex(
-	               "0000000000000000000000000000000000000000000000000000000000000001"
+	               "0100000000000000000000000000000000000000000000000000000000000000"
 	               "0000000000000000000000000000000002ea08234d99b50c51aa2fdc2e3fea3d"
 	               "0fc352046ba2d90ef3d0f4eef0def7ad",
 	               expect_asic, 80) == 0);

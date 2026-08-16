@@ -13,7 +13,7 @@
  * header wire layout, time-offset rules, or Blake2b difficulty.
  *
  * Aligned tip (update when re-porting):
- *   9228db6994  "Turn part of nonce3 into a time offset" (nTime rolling)
+ *   0d7a5e74b6  time-offset + ASIC hashPrevBlock.ReversedBytes() + profile vectors
  *
  * Network nBits / retarget: node only (pass-through from GBT).
  */

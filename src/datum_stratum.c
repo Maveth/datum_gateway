@@ -1638,7 +1638,7 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 			snprintf(jobidbuf, sizeof(jobidbuf), "%s%02x", j->job_id, cbs);
 		}
 		for (pi = 0; pi < 32; pi++) {
-			sprintf(&prev_hex[pi * 2], "%02x", j->prevhash_bin[pi]);
+			sprintf(&prev_hex[pi * 2], "%02x", j->prevhash_bin[31 - pi]); /* ASIC ReversedBytes */
 		}
 		prev_hex[64] = 0;
 

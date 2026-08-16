@@ -99,18 +99,17 @@ Any change to GetHash field order, tags, ASIC profiles, mask/XOR rules, header w
 Freeze reference when last aligned:
 
 ```text
-luke-jr/bitcoin  pow_hf_blake2b  @ 9228db6994
-  "Turn part of nonce3 into a time offset" (nTime rolling)
+luke-jr/bitcoin  pow_hf_blake2b  @ 0d7a5e74b6
+  (time-offset + ASIC ReversedBytes(prev) + official profile vectors)
 
-Why this re-port (2026-08-16):
-  - Former m_nonce3 u64 split into m_time_offset u32 + m_nonce3 u32
-  - ASIC stream profile 0/1 reorder to include time_offset
-  - h1 embeds GetTimeOnWire() so UseTimeOffset mid depends on offset
-  - Wire header SERIALIZE_METHODS writes time_on_wire + time_offset field
-  - Lab Sia ntime8 maps to time_offset||nNonce3 (usually zeros; grind nonce8)
-  - datum_pow_v2 + unit tests + stratum hooks re-aligned to this tip
-
-Mirror fork for tracking: https://github.com/Maveth/bitcoin-pow-hf-blake2b (branch pow_hf_blake2b)
+Why re-port (2026-08-16):
+  - Former m_nonce3 u64 → m_time_offset + m_nonce3 u32
+  - ASIC stream includes time_offset; profiles 0–3 (lab uses 0)
+  - h1 uses GetTimeOnWire(); UseTimeOffset mid depends on offset
+  - Wire header: time_on_wire + time_offset field
+  - **@ 0d7a5e:** ASIC uses hashPrevBlock.ReversedBytes() (not wire prev)
+  - Sia notify prev_hex is ASIC order (reversed); header wire stays internal
+  - Cross-check: src/test/data/block_header_v2.json (5 vectors)
 ```
 
 ---
