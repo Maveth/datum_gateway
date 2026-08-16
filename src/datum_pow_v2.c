@@ -250,11 +250,12 @@ bool datum_pow_v2_set_sia_nonces(datum_pow_v2_job *j, uint64_t nonce8_le, uint64
 	j->time_offset = (uint32_t)(ntime8_le & 0xffffffffu);
 	j->nNonce3 = (uint32_t)((ntime8_le >> 32) & 0xffffffffu);
 
-	if (j->flags & DATUM_POW_V2_FLAG_USE_TIME_OFFSET) {
-		/* mid includes GetTimeOnWire — recompute host mid before asic */
-		return datum_pow_v2_build(j);
-	}
-	return datum_pow_v2_set_nonce(j, j->nNonce);
+	/*
+	 * Always rebuild mid from host fields (merkle/extranonce/time_on_wire).
+	 * Submit path uses the reconstructed share merkle, which can differ from
+	 * the provisional mid stored on the job at notify time.
+	 */
+	return datum_pow_v2_build(j);
 }
 
 int datum_pow_v2_header(const datum_pow_v2_job *j, uint8_t out[164])
