@@ -97,7 +97,15 @@ Any change to GetHash field order, tags, ASIC profiles, mask/XOR rules, header w
 Freeze reference when last aligned:
 
 ```text
-luke-jr/bitcoin  pow_hf_blake2b  @ 7be6568  (multiple ASIC profiles)
+luke-jr/bitcoin  pow_hf_blake2b  @ 9228db6994  (nonce3/time-offset update)
+
+Mirror fork for tracking: https://github.com/Maveth/bitcoin-pow-hf-blake2b (branch pow_hf_blake2b)
+
+**2026-08-16 PR change (must re-align DATUM host pack):**
+- Part of former `m_nonce3` became `m_time_offset` (miner-side time rolling)
+- `m_nonce3` is now u32; ASIC stream includes `m_time_offset`
+- h1 uses `GetTimeOnWire()` when flag `UseTimeOffset` set
+- DATUM `datum_pow_v2` / Sia ntime8 mapping still matches **pre-9228db** profile-0 until re-ported
 ```
 
 ---
