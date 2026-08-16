@@ -67,9 +67,20 @@ int generate_coinbase_input(int height, char *cb, int *target_pot_index) {
 	int excess;
 	bool datum_active = false;
 	
-	// let's figure out our coinbase tags w/BIP34 height
-	i = append_UNum_hex(height, &cb[0]);
-	cb_input_sz += i>>1;
+	// BIP34: match CScript()<<nHeight (OP_0 / OP_1..OP_16 / push).
+	// Heights 1..16 fail with plain append_UNum_hex (0101 vs OP_1).
+	if (height == 0) {
+		uchar_to_hex(&cb[0], 0x00);
+		i = 2;
+		cb_input_sz += 1;
+	} else if (height >= 1 && height <= 16) {
+		uchar_to_hex(&cb[0], (unsigned char)(0x50 + height));
+		i = 2;
+		cb_input_sz += 1;
+	} else {
+		i = append_UNum_hex((uint64_t)height, &cb[0]);
+		cb_input_sz += i>>1;
+	}
 	
 	datum_active = datum_protocol_is_active();
 	

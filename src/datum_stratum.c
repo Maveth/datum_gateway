@@ -1619,8 +1619,15 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 	if (datum_config.bip110_pow_v2 && j->pow_v2_ready) {
 		char jobidbuf[40];
 		char prev_hex[65];
+		char mid_hex[65];
 		unsigned int cbs = 0;
 		int pi;
+		datum_pow_v2_job v2n;
+		uint8_t dig[32];
+		uint8_t tmp[8192];
+		uint8_t en12[12];
+		size_t L;
+		T_DATUM_STRATUM_COINBASE *cbn;
 
 		if (new_block) {
 			cbs = 255;
@@ -1635,10 +1642,54 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 		}
 		prev_hex[64] = 0;
 
+		/* Per-client mid: coinbase en = sid_inv || en2(0). Miner submits en2=0. */
+		memset(&v2n, 0, sizeof(v2n));
+		v2n.nVersion = (int32_t)(j->version_uint & 0x7fffffff);
+		memcpy(v2n.prev, j->prevhash_bin, 32);
+		memset(en12, 0, 12);
+		pk_u32le(en12, 0, m->sid_inv);
+		cbn = &j->subsidy_only_coinbase;
+		if (cbn->coinb1_len > 0 &&
+		    (size_t)cbn->coinb1_len + 12 + (size_t)cbn->coinb2_len < sizeof(tmp)) {
+			L = 0;
+			memcpy(tmp + L, cbn->coinb1_bin, cbn->coinb1_len);
+			L += (size_t)cbn->coinb1_len;
+			/* Match submit path: encode share PoT into coinbase before merkle/mid */
+			if (j->target_pot_index < cbn->coinb1_len) {
+				tmp[j->target_pot_index] = floorPoT(m->last_sent_diff ? m->last_sent_diff : 1);
+			}
+			memcpy(tmp + L, en12, 12);
+			L += 12;
+			memcpy(tmp + L, cbn->coinb2_bin, cbn->coinb2_len);
+			L += (size_t)cbn->coinb2_len;
+			double_sha256(dig, tmp, L);
+			if (j->merklebranch_count) {
+				stratum_job_merkle_root_calc(j, dig, v2n.merkle);
+			} else {
+				memcpy(v2n.merkle, dig, 32);
+			}
+		} else {
+			memcpy(v2n.merkle, j->pow_v2_merkle, 32);
+		}
+		v2n.nTime = (uint32_t)strtoul(j->ntime, NULL, 16);
+		v2n.nBits = j->nbits_uint;
+		v2n.height = (int32_t)j->height;
+		v2n.txcount = j->pow_v2_txcount ? j->pow_v2_txcount : 1;
+		v2n.flags = j->pow_v2_reserved;
+		v2n.clear_bits = j->pow_v2_clear_bits;
+		memcpy(v2n.extranonce, j->pow_v2_extranonce, 16);
+		memcpy(v2n.xor_key, j->pow_v2_xor_key, 16);
+		memcpy(v2n.mm_rhs, j->pow_v2_mm_rhs, 32);
+		if (!datum_pow_v2_build(&v2n)) {
+			memcpy(mid_hex, j->pow_v2_mid_hex, 65);
+		} else {
+			datum_pow_v2_bin_to_hex32(v2n.mid, mid_hex);
+		}
+
 		snprintf(s, sizeof(s),
-         "{\"id\":null,\"method\":\"mining.notify\",\"params\":[\"%s\",\"%s\",\"%s\",\"\",[],\"%s\",\"%s\",\"%s\",%s]}\n",
-         jobidbuf, prev_hex, j->pow_v2_mid_hex, j->version, j->nbits, j->pow_v2_ntime8,
-         ((clean) || (quickdiff) || (new_block)) ? "true" : "false");
+		         "{\"id\":null,\"method\":\"mining.notify\",\"params\":[\"%s\",\"%s\",\"%s\",\"\",[],\"%s\",\"%s\",\"%s\",%s]}\n",
+		         jobidbuf, prev_hex, mid_hex, j->version, j->nbits, j->pow_v2_ntime8,
+		         ((clean) || (quickdiff) || (new_block)) ? "true" : "false");
 		datum_socket_send_string_to_client(c, s);
 		m->last_sent_stratum_job_index = j->global_index;
 		return 0;
