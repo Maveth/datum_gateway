@@ -175,6 +175,20 @@ typedef struct {
 	bool is_datum_job;
 	unsigned char datum_job_idx;
 	unsigned char datum_coinbaser_id;
+
+	/* Blake2b V2 host outputs (datum.bip110_pow_v2); track Knots PR #359 */
+	bool pow_v2_ready;
+	uint8_t pow_v2_mid[32];
+	uint8_t pow_v2_mask[32];
+	uint8_t pow_v2_merkle[32];
+	uint8_t pow_v2_extranonce[16];
+	uint8_t pow_v2_xor_key[16];
+	uint8_t pow_v2_mm_rhs[32];
+	uint8_t pow_v2_reserved;
+	uint8_t pow_v2_clear_bits;
+	uint16_t pow_v2_txcount;
+	char pow_v2_ntime8[17];
+	char pow_v2_mid_hex[65];
 } T_DATUM_STRATUM_JOB;
 
 typedef struct T_DATUM_STRATUM_THREADPOOL_DATA {

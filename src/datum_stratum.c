@@ -57,6 +57,7 @@
 #include "datum_conf.h"
 #include "datum_coinbaser.h"
 #include "datum_submitblock.h"
+#include "datum_pow_v2.h"
 #include "datum_protocol.h"
 
 T_DATUM_SOCKET_APP *global_stratum_app = NULL;
@@ -952,7 +953,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	T_DATUM_STRATUM_COINBASE *cb = NULL;
 	unsigned char extranonce_bin[12];
 	
-	unsigned char block_header[80];
+	unsigned char block_header[164]; /* classic 80 or V2 164 */
 	unsigned char digest_temp[40];	unsigned char share_hash[40];
 	unsigned char full_cb_txn[MAX_COINBASE_TXN_SIZE_BYTES];
 	T_DATUM_MINER_DATA * const m = c->app_client_data;
@@ -1178,6 +1179,10 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 		return 0;
 	}
 	ntime_val = strtoul(ntime_s, NULL, 16);
+			/* V2: Sia-class ntime8 is nNonce3; block nTime for validation is job->ntime */
+			if (datum_config.bip110_pow_v2 && ntime_s && strlen(ntime_s) == 16) {
+				ntime_val = (uint32_t)strtoul(job->ntime, NULL, 16);
+			}
 	
 	pk_u32le(block_header, 68, ntime_val);
 	
@@ -1202,12 +1207,58 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	nonce_val = strtoul(nonce_s, NULL, 16);
 	pk_u32le(block_header, 76, nonce_val);
 	
-	my_sha256(digest_temp, block_header, 80);
-	my_sha256(share_hash, digest_temp, 32);
+	if (datum_config.bip110_pow_v2) {
+			datum_pow_v2_job v2;
+			uint64_t nonce8;
+			uint64_t ntime8;
+
+			if (!job->pow_v2_ready) {
+				send_unknown_work_error(c, id);
+				m->share_count_rejected++;
+				m->share_diff_rejected += job_diff;
+				return 0;
+			}
+
+			memset(&v2, 0, sizeof(v2));
+			v2.nVersion = (int32_t)(bver & 0x7fffffff);
+			memcpy(v2.prev, job->prevhash_bin, 32);
+			/* Wire merkle from reconstructed coinbase (share path above) */
+			memcpy(v2.merkle, &block_header[36], 32);
+			/* Block timestamp from job template (not Sia ntime8 grind slot) */
+			v2.nTime = (uint32_t)strtoul(job->ntime, NULL, 16);
+			/* Network nBits from node template */
+			v2.nBits = job->nbits_uint;
+			v2.height = (int32_t)job->height;
+			v2.txcount = job->pow_v2_txcount
+			                 ? job->pow_v2_txcount
+			                 : (empty_work ? 1 : (uint16_t)(job->block_template->txn_count + 1));
+			v2.reserved = job->pow_v2_reserved;
+			v2.clear_bits = job->pow_v2_clear_bits;
+			memcpy(v2.extranonce, job->pow_v2_extranonce, 16);
+			memcpy(v2.xor_key, job->pow_v2_xor_key, 16);
+			memcpy(v2.mm_rhs, job->pow_v2_mm_rhs, 32);
+			memcpy(v2.mid, job->pow_v2_mid, 32);
+			memcpy(v2.mask, job->pow_v2_mask, 32);
+
+			nonce8 = datum_pow_v2_parse_hex_le_u64(nonce_s);
+			ntime8 = (ntime_s && strlen(ntime_s) == 16) ? datum_pow_v2_parse_hex_le_u64(ntime_s) : 0;
+
+			if (!datum_pow_v2_set_sia_nonces(&v2, nonce8, ntime8)) {
+				send_unknown_work_error(c, id);
+				return 0;
+			}
+			memcpy(share_hash, v2.final_hash, 32);
+			if (datum_pow_v2_header(&v2, block_header) != 164) {
+				send_unknown_work_error(c, id);
+				return 0;
+			}
+		} else {
+my_sha256(digest_temp, block_header, 80);
+		my_sha256(share_hash, digest_temp, 32);
+	}
 	
-	if (upk_u32le(share_hash, 28) != 0) {
-		// H-not-zero
-		//LOG_PRINTF("HIGH HASH: %8.8lx", (unsigned long)upk_u32le(share_hash, 28));
+	if (!datum_config.bip110_pow_v2 && upk_u32le(share_hash, 28) != 0) {
+		// H-not-zero (lab V2 regtest skips — network target is easy)
 		send_rejected_hnotzero_error(c, id);
 		m->share_count_rejected++;
 		m->share_diff_rejected += job_diff;
@@ -1289,23 +1340,27 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	}
 	
 	// check if share beats miner's work target
-	if (!quickdiff) {
-		// check against job+connection target
-		if (compare_hashes(share_hash, m->stratum_job_targets[g_job_index]) > 0) {
-			// bad target diff
-			send_rejected_high_hash_error(c, id);
-			m->share_count_rejected++;
-			m->share_diff_rejected += job_diff;
-			return 0;
-		}
-	} else {
-		// check against quickdiff target instead
-		if (compare_hashes(share_hash, m->quickdiff_target) > 0) {
-			// bad target diff
-			send_rejected_high_hash_error(c, id);
-			m->share_count_rejected++;
-			m->share_diff_rejected += job_diff;
-			return 0;
+	// If the share already met the network block target, accept even when share
+	// difficulty is stricter (common on easy-nBits regtest; harmless on main).
+	if (!was_block) {
+		if (!quickdiff) {
+			// check against job+connection target
+			if (compare_hashes(share_hash, m->stratum_job_targets[g_job_index]) > 0) {
+				// bad target diff
+				send_rejected_high_hash_error(c, id);
+				m->share_count_rejected++;
+				m->share_diff_rejected += job_diff;
+				return 0;
+			}
+		} else {
+			// check against quickdiff target instead
+			if (compare_hashes(share_hash, m->quickdiff_target) > 0) {
+				// bad target diff
+				send_rejected_high_hash_error(c, id);
+				m->share_count_rejected++;
+				m->share_diff_rejected += job_diff;
+				return 0;
+			}
 		}
 	}
 	
@@ -1551,6 +1606,44 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 	}
 	
 	// We'll use the client's send buffer for sanity, since in this environment it wont result in a partial send and we can just build up the string in the output buffer
+
+		/*
+	 * Blake2b V2 miner notify (Sia-class / ASIC-shaped work).
+	 *
+	 * params: [job_id, prev, mid, "", [], version, nbits, ntime8, clean]
+	 * header80 for miner: prev || nonce8_le || ntime8_le || mid
+	 *
+	 * Dialect is provisional until OCEAN/Luke freeze the official pack.
+	 * nBits is the node template compact target (network difficulty).
+	 */
+	if (datum_config.bip110_pow_v2 && j->pow_v2_ready) {
+		char jobidbuf[40];
+		char prev_hex[65];
+		unsigned int cbs = 0;
+		int pi;
+
+		if (new_block) {
+			cbs = 255;
+			snprintf(jobidbuf, sizeof(jobidbuf), "N%s%02x", j->job_id, cbs);
+		} else if (quickdiff) {
+			snprintf(jobidbuf, sizeof(jobidbuf), "Q%s%02x", j->job_id, cbs);
+		} else {
+			snprintf(jobidbuf, sizeof(jobidbuf), "%s%02x", j->job_id, cbs);
+		}
+		for (pi = 0; pi < 32; pi++) {
+			sprintf(&prev_hex[pi * 2], "%02x", j->prevhash_bin[pi]);
+		}
+		prev_hex[64] = 0;
+
+		snprintf(s, sizeof(s),
+         "{\"id\":null,\"method\":\"mining.notify\",\"params\":[\"%s\",\"%s\",\"%s\",\"\",[],\"%s\",\"%s\",\"%s\",%s]}\n",
+         jobidbuf, prev_hex, j->pow_v2_mid_hex, j->version, j->nbits, j->pow_v2_ntime8,
+         ((clean) || (quickdiff) || (new_block)) ? "true" : "false");
+		datum_socket_send_string_to_client(c, s);
+		m->last_sent_stratum_job_index = j->global_index;
+		return 0;
+	}
+
 	datum_socket_send_string_to_client(c, "{\"id\":null,\"method\":\"mining.notify\",\"params\":[");
 	
 	if (j->job_state >= JOB_STATE_FULL_PRIORITY_WAIT_COINBASER) {
@@ -1574,6 +1667,8 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 	
 	cb = &j->coinbase[cbselect];
 	// new block work always is just a blank coinbase, for now
+
+
 	
 	if (quickdiff) {
 		snprintf(s, sizeof(s), "\"Q%s%2.2x\",\"%s\",\"", j->job_id, cbselect, j->prevhash);
@@ -2018,6 +2113,101 @@ void stratum_calculate_merkle_branches(T_DATUM_STRATUM_JOB *s) {
 	}
 }
 
+
+/*
+ * Prepare Blake2b V2 host outputs on a stratum job after coinbase/merkle setup.
+ *
+ * nBits / block_target: from the node template (GBT). Network difficulty and
+ * Blake2bTargetShift live in bitcoin/src/pow.cpp (PR #359) — pass-through only.
+ *
+ * Miner pack (profile 0): 80B = prev || nonce8 || ntime8 || mid
+ * Re-diff against pow_hf_blake2b when GetHash / profiles change.
+ */
+static void bip110_pow_v2_fill_job(T_DATUM_STRATUM_JOB *s)
+{
+	datum_pow_v2_job v2;
+	uint8_t dig[32];
+	uint8_t tmp[8192];
+	size_t L;
+	T_DATUM_STRATUM_COINBASE *cb;
+	uint32_t tc;
+
+	if (!s || !datum_config.bip110_pow_v2) {
+		if (s) {
+			s->pow_v2_ready = false;
+		}
+		return;
+	}
+
+	memset(&v2, 0, sizeof(v2));
+	v2.nVersion = (int32_t)(s->version_uint & 0x7fffffff);
+	memcpy(v2.prev, s->prevhash_bin, 32);
+
+	/* Provisional merkle from subsidy coinbase + branches (refined on submit). */
+	cb = &s->subsidy_only_coinbase;
+	if (cb->coinb1_len > 0 &&
+	    (size_t)cb->coinb1_len + 12 + (size_t)cb->coinb2_len < sizeof(tmp)) {
+		L = 0;
+		memcpy(tmp + L, cb->coinb1_bin, cb->coinb1_len);
+		L += (size_t)cb->coinb1_len;
+		memset(tmp + L, 0, 12);
+		L += 12;
+		memcpy(tmp + L, cb->coinb2_bin, cb->coinb2_len);
+		L += (size_t)cb->coinb2_len;
+		double_sha256(dig, tmp, L);
+		if (s->merklebranch_count) {
+			stratum_job_merkle_root_calc(s, dig, v2.merkle);
+		} else {
+			memcpy(v2.merkle, dig, 32);
+		}
+	}
+
+	v2.nTime = (uint32_t)strtoul(s->ntime, NULL, 16);
+	/* Network compact target from node — do not retarget in DATUM. */
+	v2.nBits = s->nbits_uint;
+	v2.height = (int32_t)s->height;
+	tc = 1;
+	if (s->block_template) {
+		tc = (uint32_t)s->block_template->txn_count + 1;
+		if (tc > 0xffff) {
+			tc = 0xffff;
+		}
+		if (tc == 0) {
+			tc = 1;
+		}
+	}
+	v2.txcount = (uint16_t)tc;
+	v2.reserved = 0; /* ASIC profile 0 — update if PR profiles change */
+	v2.clear_bits = 0;
+	memset(v2.extranonce, 0, 16);
+	v2.extranonce[0] = (uint8_t)(s->enprefix & 0xff);
+	v2.extranonce[1] = (uint8_t)((s->enprefix >> 8) & 0xff);
+
+	if (!datum_pow_v2_build(&v2)) {
+		DLOG_ERROR("bip110: pow_v2_build failed height=%lu", (unsigned long)s->height);
+		s->pow_v2_ready = false;
+		return;
+	}
+
+	memcpy(s->pow_v2_mid, v2.mid, 32);
+	memcpy(s->pow_v2_mask, v2.mask, 32);
+	memcpy(s->pow_v2_merkle, v2.merkle, 32);
+	memcpy(s->pow_v2_extranonce, v2.extranonce, 16);
+	memcpy(s->pow_v2_xor_key, v2.xor_key, 16);
+	memcpy(s->pow_v2_mm_rhs, v2.mm_rhs, 32);
+	s->pow_v2_reserved = v2.reserved;
+	s->pow_v2_clear_bits = v2.clear_bits;
+	s->pow_v2_txcount = v2.txcount;
+	/* ntime8 slot = nNonce3; lab default zero (miner may grind nonce8 only) */
+	memset(s->pow_v2_ntime8, '0', 16);
+	s->pow_v2_ntime8[16] = 0;
+	datum_pow_v2_bin_to_hex32(v2.mid, s->pow_v2_mid_hex);
+	s->pow_v2_ready = true;
+	DLOG_INFO("bip110: V2 job ready height=%lu nbits=%s mid=%.16s...",
+	          (unsigned long)s->height, s->nbits, s->pow_v2_mid_hex);
+}
+
+
 void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, int job_state) {
 	T_DATUM_STRATUM_JOB *s = &stratum_job_list[stratum_job_next];
 	int i;
@@ -2095,6 +2285,7 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	
 	// calculate the stratum merkle branches and store them on this job
 	stratum_calculate_merkle_branches(s);
+	bip110_pow_v2_fill_job(s);
 	
 	// update the latest empty data before we update the global job
 	// this way, this info is here when all of the threads switch jobs
@@ -2165,8 +2356,11 @@ int assembleBlockAndSubmit(uint8_t *block_header, uint8_t *coinbase_txn, size_t 
 	
 	ptr = submitblock_req;
 	ptr += sprintf(ptr, "{\"jsonrpc\":\"1.0\",\"id\":\"%llu\",\"method\":\"submitblock\",\"params\":[\"",(unsigned long long)time(NULL));
-	for(i=0;i<80;i++) {
-		ptr += sprintf(ptr, "%2.2x", block_header[i]);
+	{
+		size_t hdr_len = datum_config.bip110_pow_v2 ? (size_t)164 : (size_t)80;
+		for(i=0;i<hdr_len;i++) {
+			ptr += sprintf(ptr, "%2.2x", block_header[i]);
+		}
 	}
 	
 	// txn count
