@@ -154,3 +154,14 @@ make -j$(nproc)
 Lab-proven on private regtest against a Blake2b PR node: share accept + tip advance via `submitblock`. Pool protocol V2 fields and the official miner dialect may still evolve.
 
 **For reviewers:** start with this file, then `src/datum_pow_v2.*`, then the `bip110_pow_v2` conditionals in `datum_stratum.c`.
+
+## Unit tests
+
+Host math tests (Blake2b vectors + fixed GetHash-style job + Sia nonce map + profile 1 layout):
+
+```bash
+# after build
+./datum_gateway --test
+```
+
+Runs existing DATUM tests plus `datum_pow_v2_tests`. Exit non-zero on failure. Re-generate vectors if PR #359 GetHash changes.

@@ -34,6 +34,7 @@ add_executable(datum_gateway
 	src/datum_submitblock.c
 	src/datum_utils.c
 src/datum_pow_v2.c
+src/datum_pow_v2_tests.c
 	src/datum_utils_tests.c
 	src/thirdparty_base58.c
 	src/thirdparty_segwit_addr.c
