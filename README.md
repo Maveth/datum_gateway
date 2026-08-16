@@ -2,6 +2,11 @@
 **Decentralized Alternative Templates for Universal Mining**
 (c) 2024-2025 Bitcoin Ocean, LLC, Jason Hughes, and individual contributors
 
+> **BIP-110 / Blake2b V2 (this fork)**  
+> Experimental branch **`bip110-pow-v2`**: host math port + Stratum V2 hooks for [Knots PR #359](https://github.com/bitcoinknots/bitcoin/pull/359).  
+> See **[README.BIP110.md](README.BIP110.md)** for what was ported, changed, and added.  
+> The rest of this README is **stock OCEAN Gateway documentation** (SHA256d-oriented) and was **not** rewritten for Blake2b.
+
 The DATUM Gateway implements lightweight efficient client side decentralized block template creation for true solo mining.
 
 It reaches out to a local Bitcoin node for block templates, generates and distributes work for mining hardware, and submits solved blocks to the network directly.
