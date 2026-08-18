@@ -2289,6 +2289,13 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	// Set the coinbase value of this job based on the template
 	s->coinbase_value = block_template->coinbasevalue;
 	s->height = block_template->height;
+	if (block_template->blake2b_headline_len) {
+		datum_bip110_set_headline(block_template->blake2b_headline_bin, block_template->blake2b_headline_len);
+	} else if (datum_config.mining_coinbase_tag_primary[0]) {
+		datum_bip110_set_headline((const uint8_t *)datum_config.mining_coinbase_tag_primary,
+		                         (uint16_t)strlen(datum_config.mining_coinbase_tag_primary));
+	}
+
 	s->block_template = block_template;
 	
 	// stash useful binary versions of prevblockhash and nbits

@@ -43,3 +43,6 @@ void generate_base_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool ne
 int datum_coinbaser_v2_parse(T_DATUM_STRATUM_JOB *s, unsigned char *coinbaser, int cblen, bool must_free);
 
 #endif
+
+void datum_bip110_set_headline(const uint8_t *b, uint16_t n);
+

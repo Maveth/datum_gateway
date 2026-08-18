@@ -172,6 +172,11 @@ typedef struct {
 	
 	char		block_target_hex[72]; //
 	uint8_t		block_target[32]; // calculated from bits
+
+	/* BIP-110 / pow_hf_blake2b: first Blake2b block coinbase must contain this */
+	char		blake2b_headline_hex[260];
+	uint8_t		blake2b_headline_bin[128];
+	uint16_t	blake2b_headline_len;
 	
 	uint32_t 	txn_count;
 	uint32_t	txn_total_weight;

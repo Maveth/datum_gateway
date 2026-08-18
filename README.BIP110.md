@@ -99,18 +99,34 @@ Any change to GetHash field order, tags, ASIC profiles, mask/XOR rules, header w
 Freeze reference when last aligned:
 
 ```text
-luke-jr/bitcoin  pow_hf_blake2b  @ 0d7a5e74b6
-  (time-offset + ASIC ReversedBytes(prev) + official profile vectors)
+luke-jr/bitcoin  pow_hf_blake2b  @ d11c71dc96
+  (time-offset + ReversedBytes(prev) + blake2b_headline on first Blake2b block)
 
 Why re-port (2026-08-16):
   - Former m_nonce3 u64 → m_time_offset + m_nonce3 u32
   - ASIC stream includes time_offset; profiles 0–3 (lab uses 0)
   - h1 uses GetTimeOnWire(); UseTimeOffset mid depends on offset
   - Wire header: time_on_wire + time_offset field
-  - **@ 0d7a5e:** ASIC uses hashPrevBlock.ReversedBytes() (not wire prev)
+  - ASIC uses hashPrevBlock.ReversedBytes() (not wire prev)
   - Sia notify prev_hex is ASIC order (reversed); header wire stays internal
+  - **blake2b_headline:** node requires conf; first Blake2b coinbase must
+    contain those bytes (GBT aux.blake2b_headline hex → DATUM injects)
   - Cross-check: src/test/data/block_header_v2.json (5 vectors)
 ```
+
+### Lab: `blake2b_headline`
+
+Node (compose / bitcoind):
+
+```text
+-blake2b_headline=BIP110-LAB
+```
+
+DATUM solo: set `mining.coinbase_tag_primary` to the **same string** (or ensure
+GBT `aux.blake2b_headline` is parsed — this fork injects those bytes into
+coinbase). Activation height without the substring → node reject `bad-headline`.
+No useful premine of the first Blake2b block until the headline is known.
+
 
 ---
 

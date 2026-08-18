@@ -232,6 +232,36 @@ T_DATUM_TEMPLATE_DATA *datum_gbt_parser(json_t *gbt) {
 	s = json_string_value(jval);
 	strcpy(tdata->block_target_hex, s);
 	
+
+	tdata->blake2b_headline_len = 0;
+	tdata->blake2b_headline_hex[0] = 0;
+	{
+		json_t *aux = json_object_get(gbt, "aux");
+		json_t *hl;
+		const char *hs;
+		size_t hlen;
+		size_t i;
+		if (aux && json_is_object(aux)) {
+			hl = json_object_get(aux, "blake2b_headline");
+			if (hl && json_is_string(hl)) {
+				hs = json_string_value(hl);
+				hlen = strlen(hs);
+				if (hlen > 0 && (hlen & 1) == 0 && hlen <= 256) {
+					strncpy(tdata->blake2b_headline_hex, hs, sizeof(tdata->blake2b_headline_hex) - 1);
+					tdata->blake2b_headline_hex[sizeof(tdata->blake2b_headline_hex) - 1] = 0;
+					tdata->blake2b_headline_len = (uint16_t)(hlen >> 1);
+					if (tdata->blake2b_headline_len > sizeof(tdata->blake2b_headline_bin)) {
+						tdata->blake2b_headline_len = sizeof(tdata->blake2b_headline_bin);
+					}
+					for (i = 0; i < tdata->blake2b_headline_len; i++) {
+						tdata->blake2b_headline_bin[i] = hex2bin_uchar(&hs[i << 1]);
+					}
+					DLOG_INFO("bip110: GBT aux blake2b_headline (%u bytes)", (unsigned)tdata->blake2b_headline_len);
+				}
+			}
+		}
+	}
+
 	jval = json_object_get(gbt, "default_witness_commitment");
 	if (json_string_length(jval) < 38 || json_string_length(jval) > 95) {
 		DLOG_ERROR("Missing data from GBT JSON (default_witness_commitment)");

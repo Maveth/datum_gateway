@@ -60,6 +60,20 @@ const char *cbstart_hex = "01000000010000000000000000000000000000000000000000000
 
 #define MAX_COINBASE_TAG_SPACE 86 // leaves space for BIP34 height, extranonces, datum prime tag, etc.
 
+/* Set from GBT aux / lab config — must appear in first Blake2b coinbase */
+static uint8_t bip110_headline_bin[128];
+static uint16_t bip110_headline_len = 0;
+
+void datum_bip110_set_headline(const uint8_t *b, uint16_t n)
+{
+	if (!b || n == 0 || n > sizeof(bip110_headline_bin)) {
+		bip110_headline_len = 0;
+		return;
+	}
+	memcpy(bip110_headline_bin, b, n);
+	bip110_headline_len = n;
+}
+
 int generate_coinbase_input(int height, char *cb, int *target_pot_index) {
 	int cb_input_sz = 0;
 	int tag_len[2] = { 0, 0 };
@@ -170,6 +184,14 @@ int generate_coinbase_input(int height, char *cb, int *target_pot_index) {
 		uchar_to_hex(&cb[i], 0x00); i+=2; cb_input_sz++;
 	}
 	
+	/* Consensus: first Blake2b block must contain blake2b_headline bytes */
+	if (bip110_headline_len > 0 && bip110_headline_len < 75) {
+		uchar_to_hex(&cb[i], (unsigned char)bip110_headline_len); i += 2; cb_input_sz++;
+		for (m = 0; m < bip110_headline_len; m++) {
+			uchar_to_hex(&cb[i], bip110_headline_bin[m]); i += 2; cb_input_sz++;
+		}
+	}
+
 	// append the coinbase unique ID tag
 	if ((datum_config.prime_id == 0) && (!datum_active)) {
 		uchar_to_hex(&cb[i], 0x03); i+=2; cb_input_sz++;
