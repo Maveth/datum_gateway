@@ -1180,7 +1180,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	}
 	ntime_val = strtoul(ntime_s, NULL, 16);
 			/* V2: Sia-class ntime8 is nNonce3; block nTime for validation is job->ntime */
-			if (datum_config.bip110_pow_v2 && ntime_s && strlen(ntime_s) == 16) {
+			if (ntime_s && strlen(ntime_s) == 16) {
 				ntime_val = (uint32_t)strtoul(job->ntime, NULL, 16);
 			}
 	
@@ -1207,7 +1207,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	nonce_val = strtoul(nonce_s, NULL, 16);
 	pk_u32le(block_header, 76, nonce_val);
 	
-	if (datum_config.bip110_pow_v2) {
+	{
 			datum_pow_v2_job v2;
 			uint64_t nonce8;
 			uint64_t ntime8;
@@ -1252,18 +1252,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 				send_unknown_work_error(c, id);
 				return 0;
 			}
-		} else {
-my_sha256(digest_temp, block_header, 80);
-		my_sha256(share_hash, digest_temp, 32);
-	}
-	
-	if (!datum_config.bip110_pow_v2 && upk_u32le(share_hash, 28) != 0) {
-		// H-not-zero (lab V2 regtest skips — network target is easy)
-		send_rejected_hnotzero_error(c, id);
-		m->share_count_rejected++;
-		m->share_diff_rejected += job_diff;
-		return 0;
-	}
+		}
 	
 	username = json_array_get(params_obj, 0);
 	if (!username) {
@@ -1616,7 +1605,7 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 	 * Dialect is provisional until OCEAN/Luke freeze the official pack.
 	 * nBits is the node template compact target (network difficulty).
 	 */
-	if (datum_config.bip110_pow_v2 && j->pow_v2_ready) {
+	if (j->pow_v2_ready) {
 		char jobidbuf[40];
 		char prev_hex[65];
 		char mid_hex[65];
@@ -1638,7 +1627,7 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 			snprintf(jobidbuf, sizeof(jobidbuf), "%s%02x", j->job_id, cbs);
 		}
 		for (pi = 0; pi < 32; pi++) {
-			sprintf(&prev_hex[pi * 2], "%02x", j->prevhash_bin[31 - pi]); /* ASIC ReversedBytes */
+			sprintf(&prev_hex[pi * 2], "%02x", j->pow_v2_prev_asic[pi]); /* profile0 hidden+cleared */
 		}
 		prev_hex[64] = 0;
 
@@ -2183,10 +2172,7 @@ static void bip110_pow_v2_fill_job(T_DATUM_STRATUM_JOB *s)
 	T_DATUM_STRATUM_COINBASE *cb;
 	uint32_t tc;
 
-	if (!s || !datum_config.bip110_pow_v2) {
-		if (s) {
-			s->pow_v2_ready = false;
-		}
+	if (!s) {
 		return;
 	}
 
@@ -2241,6 +2227,7 @@ static void bip110_pow_v2_fill_job(T_DATUM_STRATUM_JOB *s)
 	}
 
 	memcpy(s->pow_v2_mid, v2.mid, 32);
+	memcpy(s->pow_v2_prev_asic, v2.prev_asic, 32);
 	memcpy(s->pow_v2_mask, v2.mask, 32);
 	memcpy(s->pow_v2_merkle, v2.merkle, 32);
 	memcpy(s->pow_v2_extranonce, v2.extranonce, 16);
@@ -2415,7 +2402,7 @@ int assembleBlockAndSubmit(uint8_t *block_header, uint8_t *coinbase_txn, size_t 
 	ptr = submitblock_req;
 	ptr += sprintf(ptr, "{\"jsonrpc\":\"1.0\",\"id\":\"%llu\",\"method\":\"submitblock\",\"params\":[\"",(unsigned long long)time(NULL));
 	{
-		size_t hdr_len = datum_config.bip110_pow_v2 ? (size_t)164 : (size_t)80;
+		size_t hdr_len = (size_t)164;
 		for(i=0;i<hdr_len;i++) {
 			ptr += sprintf(ptr, "%2.2x", block_header[i]);
 		}

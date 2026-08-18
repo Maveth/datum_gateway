@@ -1,14 +1,6 @@
 /*
  * datum_pow_v2.c — Blake2b V2 host construction (DATUM side)
- *
- * Port of Knots PR #359 GetHash for template build + miner pack + submitblock.
- * Aligned to pow_hf_blake2b @ 0d7a5e74b6 (time-offset + ReversedBytes prev on ASIC).
- *
- * When the PR moves, re-diff:
- *   src/primitives/block.cpp  CBlockHeader::GetHash
- *   src/primitives/block.h    CompressedHeader + SERIALIZE_METHODS
- *   src/pow.cpp               Blake2bTargetShift / GetNextWorkRequired
- *   src/test/data/block_header_v2.json
+ * Aligned to pow_hf_blake2b @ a6d74ce52f
  */
 
 #include "datum_pow_v2.h"
@@ -36,7 +28,7 @@ static void write_i32_le(uint8_t *p, int32_t v)
 static void tagged_sha256(const char *tag, const uint8_t *msg, size_t msg_len, uint8_t out[32])
 {
 	uint8_t tag_digest[32];
-	uint8_t stack_buf[64 + 128];
+	uint8_t stack_buf[64 + 160];
 	uint8_t *buf = stack_buf;
 	size_t total = 64 + msg_len;
 	int heap = 0;
@@ -116,10 +108,11 @@ uint64_t datum_pow_v2_parse_hex_le_u64(const char *hex)
 bool datum_pow_v2_build(datum_pow_v2_job *j)
 {
 	uint8_t xor_key_hash[32];
-	uint8_t h1msg[90];
+	uint8_t prev_ordered[32];
+	uint8_t prev_hidden[32];
+	uint8_t h1msg[122];
 	uint8_t h1[32];
-	uint8_t h2msg[64];
-	uint8_t h2[32];
+	uint8_t h2msg[32 + 32 + 32]; /* h1 || zeros32 || mm */
 	uint8_t mid_ss[52];
 	size_t o;
 	unsigned int i;
@@ -155,14 +148,23 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 		}
 	}
 
-	/* h1: uses GetTimeOnWire() (PR 9228db) */
+	/* ReversedBytes(prev) — ASIC/display-sane order */
+	for (i = 0; i < 32; i++) {
+		prev_ordered[i] = j->prev[31 - i];
+	}
+	/* Hide tip from silicon: hash the ordered prev */
+	tagged_sha256("Bitcoin prevblock header, hashed", prev_ordered, 32, prev_hidden);
+
+	/* h1: version || prev_ordered || height || merkle || time_on_wire || 0 || nBits || txcount || flags || clear || xorkeyhash */
 	o = 0;
 	write_u32_le(h1msg + o, (uint32_t)j->nVersion);
 	o += 4;
-	memcpy(h1msg + o, j->merkle, 32);
+	memcpy(h1msg + o, prev_ordered, 32);
 	o += 32;
 	write_u32_le(h1msg + o, (uint32_t)j->height);
 	o += 4;
+	memcpy(h1msg + o, j->merkle, 32);
+	o += 32;
 	write_u32_le(h1msg + o, datum_pow_v2_time_on_wire(j));
 	o += 4;
 	write_u32_le(h1msg + o, 0);
@@ -175,19 +177,25 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	h1msg[o++] = j->clear_bits;
 	memcpy(h1msg + o, xor_key_hash, 32);
 	o += 32;
-	if (o != 90) {
+	if (o != 122) {
 		return false;
 	}
-	tagged_sha256("Bitcoin block header 1", h1msg, 90, h1);
+	tagged_sha256("Bitcoin block header 1", h1msg, 122, h1);
 
+	/* h2: h1 || two zero uint128 || mm_rhs */
 	memcpy(h2msg, h1, 32);
-	memcpy(h2msg + 32, j->mm_rhs, 32);
-	tagged_sha256("Merge-mining hook", h2msg, 64, h2);
+	memset(h2msg + 32, 0, 32);
+	memcpy(h2msg + 64, j->mm_rhs, 32);
+	tagged_sha256("Merge-mining hook", h2msg, 96, j->h2);
 
 	write_u32_le(mid_ss, 0);
-	memcpy(mid_ss + 4, h2, 32);
+	memcpy(mid_ss + 4, j->h2, 32);
 	memcpy(mid_ss + 36, j->extranonce, 16);
 	blake2b_256(mid_ss, 52, j->mid);
+
+	/* profile-0 grind prefix: hidden prev with leading 6 bytes cleared */
+	memcpy(j->prev_asic, prev_hidden, 32);
+	memset(j->prev_asic, 0, 6);
 
 	return datum_pow_v2_set_nonce(j, j->nNonce);
 }
@@ -196,8 +204,6 @@ bool datum_pow_v2_set_nonce(datum_pow_v2_job *j, uint32_t nnonce)
 {
 	int profile;
 	uint8_t *a;
-	uint8_t prev_asic[32];
-	int i;
 
 	if (!j) {
 		return false;
@@ -207,27 +213,19 @@ bool datum_pow_v2_set_nonce(datum_pow_v2_job *j, uint32_t nnonce)
 	a = j->asic80;
 
 	/*
-	 * GetHash @ 0d7a5e: ASIC stream uses hashPrevBlock.ReversedBytes().
-	 * j->prev is header-wire / uint256 internal order (SERIALIZE_METHODS).
-	 *
-	 * Lab Sia pack uses profile 0/1 80B only. Profiles 2/3 use longer
-	 * zero-padded streams in the node; we still hash the 80B core here for
-	 * the miner dialect (flags low2 should be 0 or 1 in lab).
+	 * Profile 0: prev_asic(hidden+cleared) || nNonce || nNonce2 || time_offset || nNonce3 || mid
+	 * Profile 1: nNonce || nNonce2 || nNonce3 || time_offset || mid || h2
+	 * (Profiles 2/3 are longer on the node; lab Sia pack uses 0/1 @ 80B.)
 	 */
-	for (i = 0; i < 32; i++) {
-		prev_asic[i] = j->prev[31 - i];
-	}
-
 	if (profile == 1) {
 		write_u32_le(a + 0, j->nNonce);
 		write_u32_le(a + 4, j->nNonce2);
 		write_u32_le(a + 8, j->nNonce3);
 		write_u32_le(a + 12, j->time_offset);
 		memcpy(a + 16, j->mid, 32);
-		memcpy(a + 48, prev_asic, 32);
+		memcpy(a + 48, j->h2, 32);
 	} else {
-		/* profile 0 (and 2/3 core) */
-		memcpy(a + 0, prev_asic, 32);
+		memcpy(a + 0, j->prev_asic, 32);
 		write_u32_le(a + 32, j->nNonce);
 		write_u32_le(a + 36, j->nNonce2);
 		write_u32_le(a + 40, j->time_offset);
@@ -236,7 +234,7 @@ bool datum_pow_v2_set_nonce(datum_pow_v2_job *j, uint32_t nnonce)
 	}
 
 	blake2b_256(j->asic80, 80, j->raw_blake);
-	for (i = 0; i < 32; i++) {
+	for (int i = 0; i < 32; i++) {
 		j->final_hash[31 - i] = (uint8_t)(j->raw_blake[i] ^ j->mask[i]);
 	}
 	return true;
@@ -244,15 +242,6 @@ bool datum_pow_v2_set_nonce(datum_pow_v2_job *j, uint32_t nnonce)
 
 bool datum_pow_v2_set_sia_nonces(datum_pow_v2_job *j, uint64_t nonce8_le, uint64_t ntime8_le)
 {
-	/*
-	 * Miner-facing Sia-class layout stays 80B:
-	 *   prev | nonce8 | ntime8 | mid
-	 * After 9228db, ntime8 packs: time_offset (u32 LE) || nNonce3 (u32 LE)
-	 * so the ASIC can roll time as an offset without seeing host nTime.
-	 *
-	 * If UseTimeOffset is set, mid depends on GetTimeOnWire — host must
-	 * rebuild mid when offset changes (call build after setting offset).
-	 */
 	if (!j) {
 		return false;
 	}
@@ -260,12 +249,6 @@ bool datum_pow_v2_set_sia_nonces(datum_pow_v2_job *j, uint64_t nonce8_le, uint64
 	j->nNonce2 = (uint32_t)((nonce8_le >> 32) & 0xffffffffu);
 	j->time_offset = (uint32_t)(ntime8_le & 0xffffffffu);
 	j->nNonce3 = (uint32_t)((ntime8_le >> 32) & 0xffffffffu);
-
-	/*
-	 * Always rebuild mid from host fields (merkle/extranonce/time_on_wire).
-	 * Submit path uses the reconstructed share merkle, which can differ from
-	 * the provisional mid stored on the job at notify time.
-	 */
 	return datum_pow_v2_build(j);
 }
 
@@ -279,11 +262,6 @@ int datum_pow_v2_header(const datum_pow_v2_job *j, uint8_t out[164])
 		return -1;
 	}
 
-	/*
-	 * Wire: version|v2flag, prev, merkle, time_on_wire, nBits, nNonce,
-	 * then V2: nonce2, nonce3, extranonce, time_offset, txcount, flags,
-	 * clear_bits, xor_key, height, mm_rhs
-	 */
 	v = 0x80000000u | ((uint32_t)j->nVersion & 0x7fffffffu);
 	time_on_wire = datum_pow_v2_time_on_wire(j);
 

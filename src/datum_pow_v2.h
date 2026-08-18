@@ -5,17 +5,19 @@
  * BIP-110 / Blake2b V2 host construction for DATUM Gateway
  * ========================================================
  *
- * Mirrors CBlockHeader::GetHash() and V2 serialization from:
- *   https://github.com/bitcoinknots/bitcoin/pull/359
- *   luke-jr/bitcoin  pow_hf_blake2b
+ * Mirrors CBlockHeader::GetHash() from luke-jr/bitcoin pow_hf_blake2b.
  *
- * COUPLING: Re-diff this module whenever the PR changes GetHash, profiles,
- * header wire layout, time-offset rules, or Blake2b difficulty.
+ * Aligned tip: a6d74ce52f
+ *   - h1 includes ReversedBytes(prev) before height/merkle (122B payload)
+ *   - prevblock_hidden = TaggedHash("Bitcoin prevblock header, hashed")
+ *   - profile 0 ASIC: hidden prev with first 6 bytes cleared
+ *   - profile 1 ASIC: ends with h2_hash (not prev)
+ *   - h2 pads two zero uint128 before mm_rhs
  *
- * Aligned tip (update when re-porting):
- *   0d7a5e74b6  time-offset + ASIC hashPrevBlock.ReversedBytes() + profile vectors
- *
- * Network nBits / retarget: node only (pass-through from GBT).
+ * Why (short):
+ *   prev in h1: ASIC cannot brick on future tip; host still commits to prev
+ *   prevblock_hidden + 6 zero: grind region hides tip; leading bytes = filter space
+ *   h2 zero pads: reserved merge-mine expansion without breaking mid layout yet
  */
 
 #include <stdbool.h>
@@ -26,48 +28,44 @@
 extern "C" {
 #endif
 
-/** m_flags bit: ASIC grinds time offset; h1 uses GetTimeOnWire() = nTime - offset */
 #define DATUM_POW_V2_FLAG_USE_TIME_OFFSET 4u
 
 typedef struct datum_pow_v2_job {
-	/* Inputs (template / header) */
-	int32_t nVersion; /* without V2 wire flag 0x80000000 */
-	uint8_t prev[32];
+	int32_t nVersion;
+	uint8_t prev[32]; /* header-wire / uint256 internal */
 	uint8_t merkle[32];
-	uint32_t nTime; /* host wall / block time (real nTime) */
-	uint32_t nBits; /* from node GBT */
+	uint32_t nTime;
+	uint32_t nBits;
 	int32_t height;
 	uint16_t txcount;
-	uint8_t flags; /* low 2 bits = ASIC profile; bit2 = UseTimeOffset */
+	uint8_t flags;
 	uint8_t clear_bits;
 	uint8_t xor_key[16];
 	uint8_t mm_rhs[32];
 	uint8_t extranonce[16];
 
-	/* Grind fields (ASIC-visible) */
 	uint32_t nNonce;
 	uint32_t nNonce2;
-	uint32_t nNonce3; /* u32 after 9228db (was u64) */
-	uint32_t time_offset; /* miner-side time rolling; ASIC blind to real nTime */
+	uint32_t nNonce3;
+	uint32_t time_offset;
 
-	/* Outputs */
 	uint8_t mid[32];
 	uint8_t mask[32];
+	uint8_t h2[32]; /* exposed for profile 1 ASIC tail / debug */
+	uint8_t prev_asic[32]; /* profile-0 grind prefix (hidden+6 cleared) */
 	uint8_t asic80[80];
 	uint8_t raw_blake[32];
 	uint8_t final_hash[32];
 } datum_pow_v2_job;
 
-/** Effective time in h1: nTime, or nTime - time_offset if UseTimeOffset. */
 uint32_t datum_pow_v2_time_on_wire(const datum_pow_v2_job *j);
 
 bool datum_pow_v2_build(datum_pow_v2_job *j);
 bool datum_pow_v2_set_nonce(datum_pow_v2_job *j, uint32_t nnonce);
 
 /**
- * Sia-class 80B (profile 0):
- *   prev || nNonce || nNonce2 || time_offset || nNonce3 || mid
- * Maps miner nonce8_le → nNonce|nNonce2, ntime8_le → time_offset|nNonce3.
+ * Sia-class profile 0: header80 = prev_asic || nonce8 || ntime8 || mid
+ * (prev_asic is hashed/cleared tip — not wire prev)
  */
 bool datum_pow_v2_set_sia_nonces(datum_pow_v2_job *j, uint64_t nonce8_le, uint64_t ntime8_le);
 

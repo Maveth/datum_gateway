@@ -176,9 +176,10 @@ typedef struct {
 	unsigned char datum_job_idx;
 	unsigned char datum_coinbaser_id;
 
-	/* Blake2b V2 host outputs (datum.bip110_pow_v2); track Knots PR #359 */
+	/* Blake2b V2 host outputs (Gateway is Blake2b-only); track Knots PR #359 */
 	bool pow_v2_ready;
 	uint8_t pow_v2_mid[32];
+	uint8_t pow_v2_prev_asic[32]; /* profile0 grind prev (hidden+cleared) */
 	uint8_t pow_v2_mask[32];
 	uint8_t pow_v2_merkle[32];
 	uint8_t pow_v2_extranonce[16];

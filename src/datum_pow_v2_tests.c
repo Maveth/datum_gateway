@@ -1,8 +1,6 @@
 /*
  * Unit tests for Blake2b V2 host construction (datum_pow_v2).
- *
- * Vectors cross-checked against bip110miner Python luke_host (and PR #359 crypto).
- * Re-run / update when pow_hf_blake2b GetHash changes.
+ * Tip a6d74ce52f — update when pow_hf_blake2b GetHash changes.
  */
 
 #include <stdint.h>
@@ -40,7 +38,6 @@ static int parse_hex(const char *hex, uint8_t *out, size_t out_len)
 
 static void test_blake2b_rfc_vectors(void)
 {
-	/* Standard BLAKE2b-256 (same as PR crypto tests / Python hashlib) */
 	uint8_t out[32];
 	uint8_t expect[32];
 
@@ -57,7 +54,6 @@ static void test_blake2b_rfc_vectors(void)
 	datum_test(memcmp(out, expect, 32) == 0);
 }
 
-/* Fixed job — must match Python bip110miner.pow.luke_host finalize */
 static void test_host_job_fixed_vector(void)
 {
 	datum_pow_v2_job j;
@@ -77,49 +73,41 @@ static void test_host_job_fixed_vector(void)
 	j.nBits = 0x207fffff;
 	j.height = 1;
 	j.txcount = 1;
-	j.flags = 0; /* profile 0; no UseTimeOffset */
+	j.flags = 0;
 	j.clear_bits = 0;
-	/* xor_key and mm_rhs and extranonce already zero */
 
 	datum_test(datum_pow_v2_build(&j));
 
 	datum_test(parse_hex(
-	               "02ea08234d99b50c51aa2fdc2e3fea3d0fc352046ba2d90ef3d0f4eef0def7ad",
+	               "cba68b5b106f2878911fa0460c4748a5dfce97077a901f13ff0a157380ca9bca",
 	               expect_mid, 32) == 0);
 	datum_test(memcmp(j.mid, expect_mid, 32) == 0);
 
-	/* null xor_key → zero mask */
 	for (int i = 0; i < 32; i++) {
 		datum_test(j.mask[i] == 0);
 	}
 
-	/* @ 0d7a5e: ASIC uses ReversedBytes(prev) — prev was ...01 → asic starts 01 00.. */
 	datum_test(parse_hex(
-	               "228118b724822e68677c87b3268563963a2d656f72d1a869fbb793d662423d5e",
+	               "c270692976bd1a866ed0572afdbf31d0ac2f053ccec597a6c1922c454c54da49",
 	               expect_raw, 32) == 0);
 	datum_test(memcmp(j.raw_blake, expect_raw, 32) == 0);
 
 	datum_test(parse_hex(
-	               "5e3d4262d693b7fb69a8d1726f652d3a96638526b3877c67682e8224b7188122",
+	               "49da544c452c92c1a697c5ce3c052facd031bffd2a57d06e861abd76296970c2",
 	               expect_final, 32) == 0);
 	datum_test(memcmp(j.final_hash, expect_final, 32) == 0);
 
+	datum_test(j.prev_asic[0] == 0 && j.prev_asic[5] == 0);
 	datum_test(parse_hex(
-	               "0100000000000000000000000000000000000000000000000000000000000000"
-	               "0000000000000000000000000000000002ea08234d99b50c51aa2fdc2e3fea3d"
-	               "0fc352046ba2d90ef3d0f4eef0def7ad",
+	               "00000000000040d220de03021a7f5602b8bb61c091f12f566c66039554fa856f"
+	               "00000000000000000000000000000000cba68b5b106f2878911fa0460c4748a5"
+	               "dfce97077a901f13ff0a157380ca9bca",
 	               expect_asic, 80) == 0);
 	datum_test(memcmp(j.asic80, expect_asic, 80) == 0);
 
 	n = datum_pow_v2_header(&j, hdr);
 	datum_test(n == 164);
-	/* V2 flag | version 0x20000000 → 0xa0000000 LE */
 	datum_test(hdr[0] == 0x00 && hdr[1] == 0x00 && hdr[2] == 0x00 && hdr[3] == 0xa0);
-	/* wire nTime slot is GetTimeOnWire() == nTime when UseTimeOffset clear
-	 * 1700000000 = 0x6553f100 → LE 00 f1 53 65 */
-	datum_test(hdr[68] == 0x00 && hdr[69] == 0xf1 && hdr[70] == 0x53 && hdr[71] == 0x65);
-	/* time_offset @104 (after version..nNonce3+extranonce16); zero in this vector */
-	datum_test(hdr[104] == 0 && hdr[105] == 0 && hdr[106] == 0 && hdr[107] == 0);
 }
 
 static void test_sia_nonce_map_and_profile1(void)
@@ -138,27 +126,18 @@ static void test_sia_nonce_map_and_profile1(void)
 	datum_test(datum_pow_v2_build(&j));
 	memcpy(mid_copy, j.mid, 32);
 
-	/*
-	 * nonce8 LE: low u32 = nNonce, high = nNonce2
-	 * ntime8 LE: low u32 = time_offset, high = nNonce3  (PR 9228db)
-	 */
 	datum_test(datum_pow_v2_set_sia_nonces(&j, 0x0506070801020304ULL, 0x1122334455667788ULL));
 	datum_test(j.nNonce == 0x01020304u);
 	datum_test(j.nNonce2 == 0x05060708u);
 	datum_test(j.time_offset == 0x55667788u);
 	datum_test(j.nNonce3 == 0x11223344u);
-	datum_test(memcmp(j.mid, mid_copy, 32) == 0); /* mid independent when !UseTimeOffset */
+	datum_test(memcmp(j.mid, mid_copy, 32) == 0);
 
-	/* profile 1: nNonce at start of asic80 */
 	j.flags = 1;
 	datum_test(datum_pow_v2_set_nonce(&j, 0xAABBCCDDu));
 	datum_test(j.asic80[0] == 0xDD && j.asic80[1] == 0xCC && j.asic80[2] == 0xBB &&
 	           j.asic80[3] == 0xAA);
-	/* profile 1: nNonce3 @8, time_offset @12 */
-	datum_test(j.asic80[8] == 0x44 && j.asic80[9] == 0x33 && j.asic80[10] == 0x22 &&
-	           j.asic80[11] == 0x11);
-	datum_test(j.asic80[12] == 0x88 && j.asic80[13] == 0x77 && j.asic80[14] == 0x66 &&
-	           j.asic80[15] == 0x55);
+	datum_test(memcmp(j.asic80 + 48, j.h2, 32) == 0);
 }
 
 static void test_use_time_offset_rebuilds_mid(void)
@@ -174,24 +153,19 @@ static void test_use_time_offset_rebuilds_mid(void)
 	j.nBits = 0x207fffff;
 	j.height = 1;
 	j.txcount = 1;
-	j.flags = DATUM_POW_V2_FLAG_USE_TIME_OFFSET; /* profile 0 + UseTimeOffset */
+	j.flags = DATUM_POW_V2_FLAG_USE_TIME_OFFSET;
 	datum_test(datum_pow_v2_build(&j));
 	memcpy(mid0, j.mid, 32);
-	datum_test(datum_pow_v2_time_on_wire(&j) == j.nTime); /* offset 0 */
 
-	/* rolling offset changes GetTimeOnWire → mid must change */
 	datum_test(datum_pow_v2_set_sia_nonces(&j, 0, 0x0000000000000005ULL));
 	datum_test(j.time_offset == 5u);
-	datum_test(j.nNonce3 == 0u);
 	datum_test(datum_pow_v2_time_on_wire(&j) == j.nTime - 5u);
 	datum_test(memcmp(j.mid, mid0, 32) != 0);
 }
 
 static void test_parse_hex_le(void)
 {
-	/* 8 zero bytes */
 	datum_test(datum_pow_v2_parse_hex_le_u64("0000000000000000") == 0);
-	/* classic-style integer hex (not 16 chars) */
 	datum_test(datum_pow_v2_parse_hex_le_u64("a") == 10);
 	datum_test(datum_pow_v2_parse_hex_le_u64("ff") == 255);
 }

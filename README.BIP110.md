@@ -1,184 +1,122 @@
 # BIP-110 / Blake2b V2 (DATUM Gateway)
 
-Experimental support for [Knots PR #359](https://github.com/bitcoinknots/bitcoin/pull/359) (`pow_hf_blake2b`): DATUM builds host-side PoW fields, packs Sia-class Blake2b work for miners, and submits **V2** blocks to a compatible node.
+**Blake2b-only Gateway** for [Knots PR #359](https://github.com/bitcoinknots/bitcoin/pull/359) (`pow_hf_blake2b`).
 
-**This is a working lab fork for testing and review — not an official OCEAN release.**
+DATUM builds host-side PoW, packs Sia-class Blake2b work, and submits **164-byte V2** blocks. There is **no SHA256d PoW path** and no `bip110_pow_v2` toggle — this fork never serves classic SHA ASICs.
+
+**Lab / review fork — not an official OCEAN release.**
 
 Branch: **`bip110-pow-v2`** on https://github.com/Maveth/datum_gateway
 
----
-
-## Documentation status (read this)
-
-| Document | Updated? |
-|----------|----------|
-| **This file** (`README.BIP110.md`) | **Yes** — describes the BIP-110 work |
-| Upstream **`README.md`** and the rest of OCEAN docs | **No** — left as stock Gateway docs |
-| Inline comments in new/changed C sources | **Yes** (host module + V2 Stratum hooks) |
-
-We did **not** rewrite the full OCEAN manual, config guide, or website. If something only appears in the stock README, assume SHA256d behavior unless `datum.bip110_pow_v2` is on and you follow **this** file.
+Direction aligns with Luke (Discord): Gateway should be Blake2b-only; we’re not going back to SHA2 for PoW.
 
 ---
 
-## What was actually done (for reviewers)
+## Activation: first Blake2b on last SHA tip
 
-Three kinds of work — so you can see what is a **port**, what is **replumb**, and what is **new**.
+```text
+… SHA256d blocks (node V1) …
+        ↓  prev = last SHA tip
+   first Blake2b block (V2 header + Blake2b PoW + headline)
+        ↓
+   Blake2b-only thereafter
+```
 
-### 1. Ported (from node PR GetHash-side math)
+- **PoW:** always Blake2b V2 from this Gateway  
+- **Merkle / addresses / scripts:** still SHA256d Bitcoin plumbing  
+- **Node** height gate decides when V2 is required (`Blake2bHeight` / `DEPLOYMENT_BLAKE2B`)
 
-Mirrored into `src/datum_pow_v2.c` / `src/datum_pow_v2.h` so DATUM can build the same host construction the node will CheckPoW:
+---
 
-- TaggedHash tags / field order (header 1, merge-mining hook, XOR key/mask)
-- Mid = Blake2b-256 over host stream
-- 80-byte ASIC region + profiles (`m_flags & 3`)
-- Final digest order + mask
-- 164-byte V2 header serialization
-- **@ 9228db:** `m_time_offset` + `m_nonce3` as u32; h1 uses `GetTimeOnWire()`; flag `UseTimeOffset` (bit 2)
+## What this fork does
 
-This is **not** a full copy of the Bitcoin tree — only what the template/host needs to match PR #359.
+### Ported (node GetHash)
 
-### 2. Changed (existing DATUM SHA256d path → Blake2b V2)
+`src/datum_pow_v2.c` / `.h` mirrors tip GetHash host construction:
 
-Same Gateway jobs as today (template, coinbase, Stratum, submit), rewired when `bip110_pow_v2` is true:
+- TaggedHash (xor key/mask, prevblock hidden, header1, merge-mine hook)
+- Mid = Blake2b-256 over host stream  
+- ASIC region (profile 0/1 lab; 2/3 exist on node)  
+- Final digest ⊕ mask  
+- 164B V2 header serialize  
 
-| Area | Before (stock) | After (this branch) |
-|------|----------------|---------------------|
-| Share hash | SHA256d classic 80B header | Blake2b **final** from host construction |
-| Block assemble | 80-byte header | **164-byte** V2 header |
-| H-not-zero gate | SHA256d share filter | Skipped for V2 (Blake2b path) |
-| Job prep | N/A for mid | `bip110_pow_v2_fill_job` after template/merkle |
-| Config | — | `datum.bip110_pow_v2` |
-| Build | — | `CMakeLists.txt` compiles `datum_pow_v2.c` |
+### Changed (Gateway PoW)
 
-Files touched for plumbing: `src/datum_stratum.c`, `src/datum_stratum.h`, `src/datum_conf.c`, `src/datum_conf.h`, `CMakeLists.txt`.
+| Area | Stock OCEAN | This branch |
+|------|-------------|-------------|
+| Share hash | SHA256d 80B | Blake2b final |
+| Block header | 80B | **164B V2** |
+| Miners | SHA ASICs | **Blake2b / Sia-class only** |
+| Config switch | — | **None** (always V2) |
 
-### 3. Added (miner-facing pack — provisional)
+Merkle still uses `double_sha256` (Bitcoin tx tree) — that is **not** PoW.
 
-So a **frozen Sia-class** Blake2b miner (GPU/ASIC-style 80B grind) can be pointed at DATUM without rewriting the miner core:
+### Miner pack (provisional lab dialect)
 
 ```text
 mining.notify:
-  [job_id, prev_hex, mid_hex, "", [], version, nbits, ntime8_hex, clean]
+  [job_id, prev_asic_hex, mid_hex, "", [], version, nbits, ntime8_hex, clean]
 
-header80 (profile 0 @ 9228db):
-  prev32 || nNonce || nNonce2 || time_offset || nNonce3 || mid32
-  (Sia-class: nonce8_le = nNonce|nNonce2, ntime8_le = time_offset|nNonce3)
+header80 (profile 0 @ a6d74ce):
+  prev_asic32 || nNonce || nNonce2 || time_offset || nNonce3 || mid32
+  prev_asic = TaggedHash("Bitcoin prevblock header, hashed")(ReversedBytes(prev))
+              with first 6 bytes cleared
+  ntime8_le = time_offset || nNonce3
 
 mining.submit:
   [user, job_id, extranonce2, ntime8_hex, nonce8_hex]
 ```
 
-Official OCEAN/Luke dialect may replace this layout; treat it as a **lab contract** until upstream freezes one.
-
-### Not in this fork
-
-- Node / Knots patches (use PR #359 yourself)
-- TrueNAS / deploy ops / lab passwords
-- Full pool-protocol V2 extensions (Ocean wire may need more later)
-- Rewrite of stock OCEAN HTML docs / main README body
-
 ---
 
-## Roles (unchanged ethos)
+## Roles
 
 | Component | Responsibility |
 |-----------|----------------|
-| **Node** (PR #359) | Consensus: GetHash, CheckPoW, V2 headers, **network difficulty** |
-| **DATUM** (this branch) | Templates, coinbase, Stratum, miner pack, assemble + `submitblock` |
-| **Miner** | Blake2b-256 over the **80-byte** region only |
+| **Node** | Consensus GetHash, CheckPoW, V2, difficulty, headline |
+| **DATUM** | Templates, coinbase (+ headline inject), Stratum, assemble, submitblock |
+| **Miner** | Blake2b-256 over ASIC region only |
 
-DATUM does **not** reimplement chain retarget. It uses compact **nBits** from the node template (GBT).
-
-### Coupling to the node PR
-
-Any change to GetHash field order, tags, ASIC profiles, mask/XOR rules, header wire layout, or Blake2b difficulty in PR #359 must be re-checked against:
-
-- `src/datum_pow_v2.c` / `src/datum_pow_v2.h`
-- V2 hooks in `src/datum_stratum.c`
-
-Freeze reference when last aligned:
+### Freeze tip
 
 ```text
-luke-jr/bitcoin  pow_hf_blake2b  @ d11c71dc96
-  (time-offset + ReversedBytes(prev) + blake2b_headline on first Blake2b block)
+luke-jr/bitcoin  pow_hf_blake2b  @ a6d74ce52f
 
-Why re-port (2026-08-16):
-  - Former m_nonce3 u64 → m_time_offset + m_nonce3 u32
-  - ASIC stream includes time_offset; profiles 0–3 (lab uses 0)
-  - h1 uses GetTimeOnWire(); UseTimeOffset mid depends on offset
-  - Wire header: time_on_wire + time_offset field
-  - ASIC uses hashPrevBlock.ReversedBytes() (not wire prev)
-  - Sia notify prev_hex is ASIC order (reversed); header wire stays internal
-  - **blake2b_headline:** node requires conf; first Blake2b coinbase must
-    contain those bytes (GBT aux.blake2b_headline hex → DATUM injects)
-  - Cross-check: src/test/data/block_header_v2.json (5 vectors)
+GetHash notes:
+  - h1: version‖prev_ordered‖height‖merkle‖time… (122B)
+  - prevblock_hidden TaggedHash; profile0 clears 6 leading bytes
+  - h2: two zero uint128 pads before mm_rhs
+  - profile1 ASIC ends with h2_hash (not prev)
+  - blake2b_headline on first Blake2b coinbase (no premine)
+  - vectors: src/test/data/block_header_v2.json
 ```
 
 ### Lab: `blake2b_headline`
 
-Node (compose / bitcoind):
-
 ```text
--blake2b_headline=BIP110-LAB
+bitcoind:  -blake2b_headline=BIP110-LAB
+DATUM:     mining.coinbase_tag_primary = "BIP110-LAB"
+           (+ GBT aux.blake2b_headline inject when present)
 ```
-
-DATUM solo: set `mining.coinbase_tag_primary` to the **same string** (or ensure
-GBT `aux.blake2b_headline` is parsed — this fork injects those bytes into
-coinbase). Activation height without the substring → node reject `bad-headline`.
-No useful premine of the first Blake2b block until the headline is known.
-
-
----
-
-## Enable
-
-Under `datum` in the JSON config:
-
-```json
-"bip110_pow_v2": true
-```
-
-Point `bitcoind` RPC at a node built from `pow_hf_blake2b` (or equivalent) that accepts V2 headers. Use normal DATUM settings for pool address and tags — **do not commit secrets**.
-
----
-
-## Files (diff map)
-
-| File | Kind |
-|------|------|
-| `src/datum_pow_v2.c`, `.h` | **New** — port of host math + helpers |
-| `src/datum_stratum.c`, `.h` | **Modified** — fill job, V2 notify/submit, 164B submit |
-| `src/datum_conf.c`, `.h` | **Modified** — `bip110_pow_v2` flag |
-| `CMakeLists.txt` | **Modified** — compile new unit |
-| `README.BIP110.md` | **New** — this document |
-| `README.md` (upstream) | **Unchanged** — stock OCEAN Gateway docs |
-
-See `git log` / `git diff master...bip110-pow-v2` for the exact patch.
 
 ---
 
 ## Build
 
-Same as upstream DATUM Gateway (CMake, libcurl, jansson, libsodium, libmicrohttpd if API enabled):
-
 ```bash
 cmake -DCMAKE_BUILD_TYPE=Release .
 make -j$(nproc)
+./datum_gateway --test
 ```
 
 ---
 
-## Network difficulty
+## Follow-ups (not done here)
 
-- **Source of truth:** node compact `nBits` on the template.  
-- **Node:** retarget / first-Blake2b `Blake2bTargetShift` (`pow.cpp` in the PR).  
-- **DATUM:** pass-through nBits; share difficulty via existing vardiff; compare **Blake2b final** to share and block targets.  
-- When the PR changes difficulty policy, re-test this fork — do not add a second retarget here.
+Per Luke: **bdiff→pdiff**, string JSON-RPC ids ([OCEAN#96](https://github.com/OCEAN-xyz/datum_gateway/pull/96)), optionally ignore xor_key early. Coordinate with other Gateway Blake2b work (e.g. iohzrd) when public.
 
 ---
 
 ## Status
 
-Lab-proven on private regtest against a Blake2b PR node: share accept + tip advance via `submitblock`. Pool protocol V2 fields and the official miner dialect may still evolve.
-
-**For reviewers:** start with this file, then `src/datum_pow_v2.*`, then the `bip110_pow_v2` conditionals in `datum_stratum.c`.
+Lab-proven on private regtest against a Blake2b PR node (share/block via host path; tip advance). Official miner dialect may still evolve.

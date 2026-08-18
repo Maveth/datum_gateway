@@ -157,7 +157,6 @@ typedef struct {
 	bool datum_pool_pass_full_users;
 	bool datum_always_pay_self;
 	bool datum_pooled_mining_only;
-	bool bip110_pow_v2; /* Blake2b V2 host+pack (PR #359); network nBits from node */
 	char datum_pool_pubkey[1024];
 	int datum_protocol_global_timeout;
 	uint64_t datum_protocol_global_timeout_ms;
