@@ -80,7 +80,8 @@ mining.submit:
 ### Freeze tip
 
 ```text
-luke-jr/bitcoin  pow_hf_blake2b  @ ca52286218
+luke-jr/bitcoin  pow_hf_blake2b  @ 5a3f788e84
+  (GetHash identical to ca52286218; tip also WrappingAdd/Sub for time_offset)
 
 GetHash notes:
   - h1: version‖prev_ordered‖height‖merkle‖time‖u8(0)… (119B; was 122)
@@ -88,6 +89,7 @@ GetHash notes:
   - h2: two zero uint128 pads before mm_rhs
   - profile1 ASIC ends with h2_hash (not prev)
   - blake2b_headline on first Blake2b coinbase (no premine)
+  - time_on_wire / nTime: uint32 wrap (WrappingAdd/WrappingSubtract)
   - vectors: src/test/data/block_header_v2.json
 ```
 

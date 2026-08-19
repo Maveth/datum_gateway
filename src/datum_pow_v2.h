@@ -7,12 +7,13 @@
  *
  * Mirrors CBlockHeader::GetHash() from luke-jr/bitcoin pow_hf_blake2b.
  *
- * Aligned tip: ca52286218
+ * Aligned tip: 5a3f788e84 (GetHash same as ca52286218)
  *   - h1 includes ReversedBytes(prev); reserved time is uint8_t (119B payload)
  *   - prevblock_hidden = TaggedHash("Bitcoin prevblock header, hashed")
  *   - profile 0 ASIC: hidden prev with first 6 bytes cleared
  *   - profile 1 ASIC: ends with h2_hash (not prev)
  *   - h2 pads two zero uint128 before mm_rhs
+ *   - time_on_wire: uint32 wrap (== tip WrappingAdd/WrappingSubtract)
  *
  * Why (short):
  *   prev in h1: ASIC cannot brick on future tip; host still commits to prev

@@ -1,6 +1,6 @@
 /*
  * datum_pow_v2.c — Blake2b V2 host construction (DATUM side)
- * Aligned to pow_hf_blake2b @ ca52286218 (h1 reserved time = uint8_t → 119B)
+ * Aligned to pow_hf_blake2b @ 5a3f788e84 (GetHash == ca52286218; h1 u8 reserved → 119B)
  */
 
 #include "datum_pow_v2.h"
@@ -66,6 +66,7 @@ uint32_t datum_pow_v2_time_on_wire(const datum_pow_v2_job *j)
 	if ((j->flags & DATUM_POW_V2_FLAG_USE_TIME_OFFSET) == 0) {
 		return j->nTime;
 	}
+	/* uint32 wrap == tip WrappingSubtract(nTime, m_time_offset) @ 5a3f788e84 */
 	return j->nTime - j->time_offset;
 }
 
