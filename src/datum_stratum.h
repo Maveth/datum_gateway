@@ -288,6 +288,7 @@ int assembleBlockAndSubmit(uint8_t *block_header, uint8_t *coinbase_txn, size_t 
 void generate_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool empty_only);
 int send_mining_set_difficulty(T_DATUM_CLIENT_DATA *c);
 bool stratum_latest_empty_check_ready_for_full(void);
+bool datum_stratum_accept_sia_regtest_share(const T_DATUM_STRATUM_JOB *job);
 
 // Server thread main loop
 void *datum_stratum_v1_socket_server(void *arg);

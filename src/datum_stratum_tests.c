@@ -180,4 +180,20 @@ void datum_stratum_mod_username_tests() {
 
 void datum_stratum_tests(void) {
 	datum_stratum_mod_username_tests();
+
+	T_DATUM_STRATUM_JOB job = {0};
+	datum_config.stratum_v1_accept_sia_regtest_shares = false;
+	job.pow_v2_ready = true;
+	job.nbits_uint = 0x207fffffU;
+	datum_test(!datum_stratum_accept_sia_regtest_share(&job));
+
+	datum_config.stratum_v1_accept_sia_regtest_shares = true;
+	job.pow_v2_ready = false;
+	datum_test(!datum_stratum_accept_sia_regtest_share(&job));
+	job.pow_v2_ready = true;
+	job.nbits_uint = 0x1d00ffffU;
+	datum_test(!datum_stratum_accept_sia_regtest_share(&job));
+	job.nbits_uint = 0x207fffffU;
+	datum_test(datum_stratum_accept_sia_regtest_share(&job));
+	datum_config.stratum_v1_accept_sia_regtest_shares = false;
 }

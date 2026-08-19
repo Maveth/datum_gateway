@@ -917,6 +917,11 @@ const char *datum_stratum_mod_username(const char *username_s, char * const user
 	return username_buf;
 }
 
+bool datum_stratum_accept_sia_regtest_share(const T_DATUM_STRATUM_JOB *job) {
+	return datum_config.stratum_v1_accept_sia_regtest_shares &&
+		job && job->pow_v2_ready && job->nbits_uint == 0x207fffffU;
+}
+
 int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj) {
 	// {"params": ["username", "job", "extranonce2", "time", "nonce", "version"], "id": 1, "method": "mining.submit"}
 	// 0 = username
@@ -1331,7 +1336,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	// check if share beats miner's work target
 	// If the share already met the network block target, accept even when share
 	// difficulty is stricter (common on easy-nBits regtest; harmless on main).
-	if (!was_block) {
+	if (!was_block && !datum_stratum_accept_sia_regtest_share(job)) {
 		if (!quickdiff) {
 			// check against job+connection target
 			if (compare_hashes(share_hash, m->stratum_job_targets[g_job_index]) > 0) {
