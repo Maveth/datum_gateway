@@ -236,7 +236,9 @@ T_DATUM_TEMPLATE_DATA *datum_gbt_parser(json_t *gbt) {
 	tdata->blake2b_headline_len = 0;
 	tdata->blake2b_headline_hex[0] = 0;
 	{
-		json_t *aux = json_object_get(gbt, "aux");
+		/* BIP-22 names this field "coinbaseaux"; accept "aux" as a fallback. */
+		json_t *aux = json_object_get(gbt, "coinbaseaux");
+		if (!aux) aux = json_object_get(gbt, "aux");
 		json_t *hl;
 		const char *hs;
 		size_t hlen;
