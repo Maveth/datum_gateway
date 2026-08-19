@@ -113,9 +113,28 @@ make -j$(nproc)
 
 ---
 
+## Community ports (credited)
+
+We bend to Luke’s node tip first. When other Gateway forks have useful *non-PoW* fixes, we prefer **git cherry-pick** (keeps their author) when the commit is clean; otherwise we re-apply the idea and credit them in the commit message / here.
+
+| Change | Source | How we took it | Adjust / revert |
+|--------|--------|----------------|-----------------|
+| String JSON-RPC request ids | [connorslab](https://github.com/connorslab/datum_gateway) `927d7e1` (on our branch) | `git cherry-pick -x` — author remains **connorslab** | Revert that commit; see `datum_stratum_request_id` / `datum_stratum_response_id` |
+| Dashboard homepage heap buffer | [connorslab](https://github.com/connorslab/datum_gateway) `e745328` | `git cherry-pick -x` — author remains **connorslab** | Revert that commit; `datum_api_homepage` |
+| Local / solo share counters on dashboard | [justinfilip](https://github.com/justinfilip/datum_gateway) (idea from their Blake2b+stats commit) | **Re-implemented** — their commit also ships a different PoW dialect we do not merge | Remove `stratum_note_share` / `STRATUM_SHARES_*` / Local rows in `www/home.html` |
+
+**Skipped (for now):** connorslab `accept_sia_regtest_shares` (lab shortcut that can hide share-diff bugs; leave off). justinfilip dual-mode SHA+Blake2b / Sia `coinb1` notify dialect (we stay Blake2b-only + `prev_asic`/`mid`).
+
+### Dashboard meaning (solo lab)
+
+- **Local Shares Accepted/Rejected** — gateway Stratum validation (shows work with no pool).
+- **Pool Shares …** — DATUM pool protocol counters; **N/A** when `datum_pool_host` is blank.
+
+---
+
 ## Follow-ups (not done here)
 
-Per Luke: **bdiff→pdiff**, string JSON-RPC ids ([OCEAN#96](https://github.com/OCEAN-xyz/datum_gateway/pull/96)), optionally ignore xor_key early. Coordinate with other Gateway Blake2b work (e.g. iohzrd) when public.
+Per Luke: **bdiff→pdiff**, optionally ignore xor_key early. String JSON-RPC ids ([OCEAN#96](https://github.com/OCEAN-xyz/datum_gateway/pull/96)) are now ported (connorslab cherry-pick).
 
 ---
 

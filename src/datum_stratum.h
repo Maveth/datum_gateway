@@ -279,6 +279,12 @@ extern int global_latest_stratum_job_index;
 extern pthread_rwlock_t stratum_global_job_ptr_lock;
 extern T_DATUM_STRATUM_JOB *global_cur_stratum_jobs[MAX_STRATUM_JOBS];
 
+/* Gateway-local Stratum accept/reject totals (solo-visible dashboard). */
+extern uint64_t stratum_client_accepted_share_count;
+extern uint64_t stratum_client_accepted_share_diff;
+extern uint64_t stratum_client_rejected_share_count;
+extern uint64_t stratum_client_rejected_share_diff;
+
 const char *datum_stratum_mod_username(const char *username_s, char *username_buf, size_t username_buf_sz, uint16_t share_rnd, const char *modname, size_t modname_len);
 bool datum_stratum_request_id(json_t *id_obj, uint64_t *id);
 const char *datum_stratum_response_id(char *buf, size_t bufsz, uint64_t id);
