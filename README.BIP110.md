@@ -80,10 +80,10 @@ mining.submit:
 ### Freeze tip
 
 ```text
-luke-jr/bitcoin  pow_hf_blake2b  @ a6d74ce52f
+luke-jr/bitcoin  pow_hf_blake2b  @ ca52286218
 
 GetHash notes:
-  - h1: version‖prev_ordered‖height‖merkle‖time… (122B)
+  - h1: version‖prev_ordered‖height‖merkle‖time‖u8(0)… (119B; was 122)
   - prevblock_hidden TaggedHash; profile0 clears 6 leading bytes
   - h2: two zero uint128 pads before mm_rhs
   - profile1 ASIC ends with h2_hash (not prev)

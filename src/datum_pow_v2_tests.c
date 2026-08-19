@@ -1,6 +1,6 @@
 /*
  * Unit tests for Blake2b V2 host construction (datum_pow_v2).
- * Tip a6d74ce52f — update when pow_hf_blake2b GetHash changes.
+ * Tip ca52286218 — update when pow_hf_blake2b GetHash changes.
  */
 
 #include <stdint.h>
@@ -79,7 +79,7 @@ static void test_host_job_fixed_vector(void)
 	datum_test(datum_pow_v2_build(&j));
 
 	datum_test(parse_hex(
-	               "cba68b5b106f2878911fa0460c4748a5dfce97077a901f13ff0a157380ca9bca",
+	               "0e19be371ae77ae82bfc9244bda8fc3d737d088c76afd3bd9a1a0d7290935753",
 	               expect_mid, 32) == 0);
 	datum_test(memcmp(j.mid, expect_mid, 32) == 0);
 
@@ -88,20 +88,20 @@ static void test_host_job_fixed_vector(void)
 	}
 
 	datum_test(parse_hex(
-	               "c270692976bd1a866ed0572afdbf31d0ac2f053ccec597a6c1922c454c54da49",
+	               "f58b8f90f38550d1152e49004ae463c87d506339bc109da65a6433e1d7d5938c",
 	               expect_raw, 32) == 0);
 	datum_test(memcmp(j.raw_blake, expect_raw, 32) == 0);
 
 	datum_test(parse_hex(
-	               "49da544c452c92c1a697c5ce3c052facd031bffd2a57d06e861abd76296970c2",
+	               "8c93d5d7e133645aa69d10bc3963507dc863e44a00492e15d15085f3908f8bf5",
 	               expect_final, 32) == 0);
 	datum_test(memcmp(j.final_hash, expect_final, 32) == 0);
 
 	datum_test(j.prev_asic[0] == 0 && j.prev_asic[5] == 0);
 	datum_test(parse_hex(
 	               "00000000000040d220de03021a7f5602b8bb61c091f12f566c66039554fa856f"
-	               "00000000000000000000000000000000cba68b5b106f2878911fa0460c4748a5"
-	               "dfce97077a901f13ff0a157380ca9bca",
+	               "000000000000000000000000000000000e19be371ae77ae82bfc9244bda8fc3d"
+	               "737d088c76afd3bd9a1a0d7290935753",
 	               expect_asic, 80) == 0);
 	datum_test(memcmp(j.asic80, expect_asic, 80) == 0);
 

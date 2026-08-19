@@ -1,6 +1,6 @@
 /*
  * datum_pow_v2.c — Blake2b V2 host construction (DATUM side)
- * Aligned to pow_hf_blake2b @ a6d74ce52f
+ * Aligned to pow_hf_blake2b @ ca52286218 (h1 reserved time = uint8_t → 119B)
  */
 
 #include "datum_pow_v2.h"
@@ -110,7 +110,7 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	uint8_t xor_key_hash[32];
 	uint8_t prev_ordered[32];
 	uint8_t prev_hidden[32];
-	uint8_t h1msg[122];
+	uint8_t h1msg[119];
 	uint8_t h1[32];
 	uint8_t h2msg[32 + 32 + 32]; /* h1 || zeros32 || mm */
 	uint8_t mid_ss[52];
@@ -155,7 +155,7 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	/* Hide tip from silicon: hash the ordered prev */
 	tagged_sha256("Bitcoin prevblock header, hashed", prev_ordered, 32, prev_hidden);
 
-	/* h1: version || prev_ordered || height || merkle || time_on_wire || 0 || nBits || txcount || flags || clear || xorkeyhash */
+	/* h1 @ ca522862: … time_on_wire || u8(0) || nBits … (119B; was u32 reserved → 122) */
 	o = 0;
 	write_u32_le(h1msg + o, (uint32_t)j->nVersion);
 	o += 4;
@@ -167,8 +167,7 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	o += 32;
 	write_u32_le(h1msg + o, datum_pow_v2_time_on_wire(j));
 	o += 4;
-	write_u32_le(h1msg + o, 0);
-	o += 4;
+	h1msg[o++] = 0; /* reserved extended 40-bit time */
 	write_u32_le(h1msg + o, j->nBits);
 	o += 4;
 	write_u32_le(h1msg + o, (uint32_t)j->txcount);
@@ -177,10 +176,10 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	h1msg[o++] = j->clear_bits;
 	memcpy(h1msg + o, xor_key_hash, 32);
 	o += 32;
-	if (o != 122) {
+	if (o != 119) {
 		return false;
 	}
-	tagged_sha256("Bitcoin block header 1", h1msg, 122, h1);
+	tagged_sha256("Bitcoin block header 1", h1msg, 119, h1);
 
 	/* h2: h1 || two zero uint128 || mm_rhs */
 	memcpy(h2msg, h1, 32);

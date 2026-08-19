@@ -7,8 +7,8 @@
  *
  * Mirrors CBlockHeader::GetHash() from luke-jr/bitcoin pow_hf_blake2b.
  *
- * Aligned tip: a6d74ce52f
- *   - h1 includes ReversedBytes(prev) before height/merkle (122B payload)
+ * Aligned tip: ca52286218
+ *   - h1 includes ReversedBytes(prev); reserved time is uint8_t (119B payload)
  *   - prevblock_hidden = TaggedHash("Bitcoin prevblock header, hashed")
  *   - profile 0 ASIC: hidden prev with first 6 bytes cleared
  *   - profile 1 ASIC: ends with h2_hash (not prev)
