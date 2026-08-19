@@ -694,10 +694,40 @@ void datum_stratum_v1_socket_thread_loop(T_DATUM_THREAD_DATA *my) {
 	}
 }
 
+static _Thread_local char stratum_request_id_json[256];
+
+bool datum_stratum_request_id(json_t *id_obj, uint64_t *id) {
+	char *id_json;
+
+	stratum_request_id_json[0] = 0;
+	if (json_is_integer(id_obj)) {
+		*id = json_integer_value(id_obj);
+		return true;
+	}
+	if (!json_is_string(id_obj)) return false;
+
+	id_json = json_dumps(id_obj, JSON_COMPACT | JSON_ENCODE_ANY);
+	if (!id_json || strlen(id_json) >= sizeof(stratum_request_id_json)) {
+		free(id_json);
+		return false;
+	}
+	strcpy(stratum_request_id_json, id_json);
+	free(id_json);
+	*id = 0;
+	return true;
+}
+
+const char *datum_stratum_response_id(char *buf, const size_t bufsz, const uint64_t id) {
+	if (stratum_request_id_json[0]) return stratum_request_id_json;
+	snprintf(buf, bufsz, "%"PRIu64, id);
+	return buf;
+}
+
 void send_error_to_client(T_DATUM_CLIENT_DATA *c, uint64_t id, char *e) {
 	// "e" must be valid JSON string
 	char s[1024];
-	snprintf(s, sizeof(s), "{\"error\":%s,\"id\":%"PRIu64",\"result\":null}\n", e, id);
+	char idbuf[32];
+	snprintf(s, sizeof(s), "{\"error\":%s,\"id\":%s,\"result\":null}\n", e, datum_stratum_response_id(idbuf, sizeof(idbuf), id));
 	datum_socket_send_string_to_client(c, s);
 }
 
@@ -1380,7 +1410,8 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	}
 	
 	char s[256];
-	snprintf(s, sizeof(s), "{\"error\":null,\"id\":%"PRIu64",\"result\":true}\n", id);
+	char idbuf[32];
+	snprintf(s, sizeof(s), "{\"error\":null,\"id\":%s,\"result\":true}\n", datum_stratum_response_id(idbuf, sizeof(idbuf), id));
 	datum_socket_send_string_to_client(c, s);
 	
 	// update connection totals
@@ -1467,7 +1498,8 @@ int client_mining_configure(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 		}
 	}
 	
-	i = snprintf(sa, sizeof(sa), "{\"error\":null,\"id\":%"PRIu64",\"result\":{", id);
+	char idbuf[32];
+	i = snprintf(sa, sizeof(sa), "{\"error\":null,\"id\":%s,\"result\":{", datum_stratum_response_id(idbuf, sizeof(idbuf), id));
 	if (new_vroll) {
 		i+= snprintf(&sa[i], sizeof(sa)-i, "\"version-rolling\":true,\"version-rolling.mask\":\"%08x\"", m->extension_version_rolling_mask);
 	}
@@ -1488,6 +1520,7 @@ int client_mining_configure(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 
 int client_mining_authorize(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj) {
 	char s[256];
+	char idbuf[32];
 	const char *username_s;
 	json_t *username;
 	
@@ -1506,7 +1539,7 @@ int client_mining_authorize(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	strncpy(m->last_auth_username, username_s, sizeof(m->last_auth_username) - 1);
 	m->last_auth_username[sizeof(m->last_auth_username)-1] = 0;
 	
-	snprintf(s, sizeof(s), "{\"error\":null,\"id\":%"PRIu64",\"result\":true}\n", id);
+	snprintf(s, sizeof(s), "{\"error\":null,\"id\":%s,\"result\":true}\n", datum_stratum_response_id(idbuf, sizeof(idbuf), id));
 	datum_socket_send_string_to_client(c, s);
 	
 	m->authorized = true;
@@ -1853,6 +1886,7 @@ void datum_stratum_fingerprint_by_UA(T_DATUM_MINER_DATA *m) {
 int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj) {
 	uint32_t sid;
 	char s[1024];
+	char idbuf[32];
 	T_DATUM_MINER_DATA * const m = c->app_client_data;
 	json_t *useragent;
 	
@@ -1900,7 +1934,7 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	m->sid_inv = ((sid>>24)&0xff) | (((sid>>16)&0xff)<<8) | (((sid>>8)&0xff)<<16) | ((sid&0xff)<<24);
 	
 	// tell them about all of this
-	snprintf(s, sizeof(s), "{\"error\":null,\"id\":%"PRIu64",\"result\":[[[\"mining.notify\",\"%8.8x1\"],[\"mining.set_difficulty\",\"%8.8x2\"]],\"%8.8x\",8]}\n", id, sid, sid, sid);
+	snprintf(s, sizeof(s), "{\"error\":null,\"id\":%s,\"result\":[[[\"mining.notify\",\"%8.8x1\"],[\"mining.set_difficulty\",\"%8.8x2\"]],\"%8.8x\",8]}\n", datum_stratum_response_id(idbuf, sizeof(idbuf), id), sid, sid, sid);
 	datum_socket_send_string_to_client(c, s);
 	
 	// send them their current difficulty before sending a job
@@ -1955,14 +1989,10 @@ int datum_stratum_v1_socket_thread_client_cmd(T_DATUM_CLIENT_DATA *c, char *line
 		return -4;
 	}
 	
-	// enforce that id must be an integer.  might not be 100% to spec, but is sane and nothing known violates this.
-	// allowing arbitrary non-integer things here is a potential DoS vector.
-	if (!json_is_integer(id_obj)) {
+	if (!datum_stratum_request_id(id_obj, &id)) {
 		json_decref(j);
 		return -4;
 	}
-	
-	id = json_integer_value(id_obj);
 	
 	if (!(params_obj = json_object_get(j, "params"))) {
 		json_decref(j);
