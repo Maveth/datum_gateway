@@ -298,3 +298,41 @@ int datum_pow_v2_header(const datum_pow_v2_job *j, uint8_t out[164])
 
 	return (o == 164) ? 164 : -1;
 }
+
+void datum_pow_v2_sia_coinb1(uint8_t out[DATUM_POW_V2_SIA_COINB1_LEN], const uint8_t h2[32])
+{
+	if (!out || !h2) {
+		return;
+	}
+	memset(out, 0, 3);
+	memcpy(out + 3, h2, 32);
+	memset(out + 35, 0, 4);
+}
+
+void datum_pow_v2_set_extranonce_from_en12(datum_pow_v2_job *j, const uint8_t en12[12])
+{
+	if (!j || !en12) {
+		return;
+	}
+	memset(j->extranonce, 0, 4);
+	memcpy(j->extranonce + 4, en12, 12);
+}
+
+bool datum_pow_v2_mid_from_sia_en12(uint8_t mid[32], const uint8_t h2[32], const uint8_t en12[12])
+{
+	uint8_t leaf[52];
+	uint8_t coinb1[DATUM_POW_V2_SIA_COINB1_LEN];
+
+	if (!mid || !h2 || !en12) {
+		return false;
+	}
+	if (sodium_init() < 0) {
+		return false;
+	}
+	datum_pow_v2_sia_coinb1(coinb1, h2);
+	leaf[0] = 0x00;
+	memcpy(leaf + 1, coinb1, DATUM_POW_V2_SIA_COINB1_LEN);
+	memcpy(leaf + 40, en12, 12);
+	blake2b_256(leaf, 52, mid);
+	return true;
+}

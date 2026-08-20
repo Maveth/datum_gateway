@@ -31,6 +31,10 @@ extern "C" {
 
 #define DATUM_POW_V2_FLAG_USE_TIME_OFFSET 4u
 
+/* Sv1 Sia coinb1: 3×0x00 || h2(32) || 4×0x00  (39B). With stratum en12 and
+ * hasher prefix 0x00, leaf = u32(0)||h2||(0x00000000||en12) == tip mid stream. */
+#define DATUM_POW_V2_SIA_COINB1_LEN 39
+
 typedef struct datum_pow_v2_job {
 	int32_t nVersion;
 	uint8_t prev[32]; /* header-wire / uint256 internal */
@@ -74,6 +78,18 @@ int datum_pow_v2_header(const datum_pow_v2_job *j, uint8_t out[164]);
 
 uint64_t datum_pow_v2_parse_hex_le_u64(const char *hex);
 void datum_pow_v2_bin_to_hex32(const uint8_t in[32], char out[65]);
+
+/** Pack Sv1 coinb1 from h2 (Luke tip / stock Sia firmware). */
+void datum_pow_v2_sia_coinb1(uint8_t out[DATUM_POW_V2_SIA_COINB1_LEN], const uint8_t h2[32]);
+
+/**
+ * Mid from Sia leaf: Blake2b(0x00 || coinb1[39] || en12).
+ * Equivalent to tip mid when m_extranonce = 4×0x00 || en12.
+ */
+bool datum_pow_v2_mid_from_sia_en12(uint8_t mid[32], const uint8_t h2[32], const uint8_t en12[12]);
+
+/** Set m_extranonce = 4×0x00 || en12 (Luke tip ↔ 12-byte Sv1 extranonce). */
+void datum_pow_v2_set_extranonce_from_en12(datum_pow_v2_job *j, const uint8_t en12[12]);
 
 #ifdef __cplusplus
 }

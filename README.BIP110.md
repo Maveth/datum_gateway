@@ -46,23 +46,34 @@ Direction aligns with Luke (Discord): Gateway should be Blake2b-only; we’re no
 |------|-------------|-------------|
 | Share hash | SHA256d 80B | Blake2b final |
 | Block header | 80B | **164B V2** |
-| Miners | SHA ASICs | **Blake2b / Sia-class only** |
-| Config switch | — | **None** (always V2) |
+| Miners | SHA ASICs | **Blake2b only** (Sia-Sv1 default + lab-mid UA) |
+| Config switch | — | **None** for PoW (always V2); dialect by subscribe UA |
 
 Merkle still uses `double_sha256` (Bitcoin tx tree) — that is **not** PoW.
 
-### Miner pack (provisional lab dialect)
+### Miner pack (two Blake2b Stratum dialects → one GetHash)
+
+**Default — Sia-Sv1** (stock Sia GPU miners, Antminer A3, Goldshell-class):
 
 ```text
 mining.notify:
-  [job_id, prev_asic_hex, mid_hex, "", [], version, nbits, ntime8_hex, clean]
+  [job_id, prev_asic_hex, coinb1_39hex, "", [], version, nbits, ntime8_hex, clean]
 
-header80 (profile 0 @ a6d74ce):
-  prev_asic32 || nNonce || nNonce2 || time_offset || nNonce3 || mid32
-  prev_asic = TaggedHash("Bitcoin prevblock header, hashed")(ReversedBytes(prev))
-              with first 6 bytes cleared
-  ntime8_le = time_offset || nNonce3
+coinb1 = 3×0x00 || h2(32) || 4×0x00   (39 bytes; Luke Sv1 hint)
+miner mid = Blake2b(0x00 || coinb1 || en1 || en2)
+header80  = prev_asic || nonce8_le || ntime8_le || mid
+```
 
+**Lab-mid** (opt-in via subscribe UA containing `gpu-lab` / `sia-class-frozen` / `bip110-lab`):
+
+```text
+mining.notify:
+  [job_id, prev_asic_hex, mid32_hex, "", [], version, nbits, ntime8_hex, clean]
+```
+
+Both rebuild the same tip GetHash on submit (`m_extranonce = 4×0x00 || sid_inv||en2`).
+
+```text
 mining.submit:
   [user, job_id, extranonce2, ntime8_hex, nonce8_hex]
 ```
@@ -115,15 +126,16 @@ make -j$(nproc)
 
 ## Community ports (credited)
 
-We bend to Luke’s node tip first. When other Gateway forks have useful *non-PoW* fixes, we prefer **git cherry-pick** (keeps their author) when the commit is clean; otherwise we re-apply the idea and credit them in the commit message / here.
+We bend to Luke’s node tip first. When other Gateway forks have useful fixes, we prefer **git cherry-pick** when clean; otherwise re-apply with credit.
 
 | Change | Source | How we took it | Adjust / revert |
 |--------|--------|----------------|-----------------|
-| String JSON-RPC request ids | [connorslab](https://github.com/connorslab/datum_gateway) `927d7e1` (on our branch) | `git cherry-pick -x` — author remains **connorslab** | Revert that commit; see `datum_stratum_request_id` / `datum_stratum_response_id` |
-| Dashboard homepage heap buffer | [connorslab](https://github.com/connorslab/datum_gateway) `e745328` | `git cherry-pick -x` — author remains **connorslab** | Revert that commit; `datum_api_homepage` |
-| Local / solo share counters on dashboard | [justinfilip](https://github.com/justinfilip/datum_gateway) (idea from their Blake2b+stats commit) | **Re-implemented** — their commit also ships a different PoW dialect we do not merge | Remove `stratum_note_share` / `STRATUM_SHARES_*` / Local rows in `www/home.html` |
+| String JSON-RPC request ids | [connorslab](https://github.com/connorslab/datum_gateway) `927d7e1` | `git cherry-pick -x` | Revert; `datum_stratum_request_id` |
+| Dashboard homepage heap buffer | [connorslab](https://github.com/connorslab/datum_gateway) `e745328` | `git cherry-pick -x` | Revert; `datum_api_homepage` |
+| Local / solo share counters | [justinfilip](https://github.com/justinfilip/datum_gateway) | Re-implemented (not their full PoW commit) | `stratum_note_share` / `STRATUM_SHARES_*` |
+| Sia-Sv1 coinb1 notify (default) | Luke tip comment + justinfilip A3 path | Tip-accurate `coinb1`/`en12` mid equivalence | `DATUM_POW_DIALECT_*` / `datum_pow_v2_sia_coinb1` |
 
-**Skipped (for now):** connorslab `accept_sia_regtest_shares` (lab shortcut that can hide share-diff bugs; leave off). justinfilip dual-mode SHA+Blake2b / Sia `coinb1` notify dialect (we stay Blake2b-only + `prev_asic`/`mid`).
+**Skipped:** SHA256d PoW path; connorslab `accept_sia_regtest_shares` default-on.
 
 ### Dashboard meaning (solo lab)
 

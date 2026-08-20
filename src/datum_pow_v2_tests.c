@@ -170,6 +170,38 @@ static void test_parse_hex_le(void)
 	datum_test(datum_pow_v2_parse_hex_le_u64("ff") == 255);
 }
 
+/* Stock Sia leaf (0x00||coinb1||en12) must equal tip mid (u32_0||h2||0x00000000||en12). */
+static void test_sia_coinb1_mid_matches_build(void)
+{
+	datum_pow_v2_job j;
+	uint8_t en12[12];
+	uint8_t mid_sia[32];
+	uint8_t coinb1[DATUM_POW_V2_SIA_COINB1_LEN];
+	int i;
+
+	memset(&j, 0, sizeof(j));
+	j.nVersion = 0x20000000;
+	j.prev[31] = 0x01;
+	memset(j.merkle, 0x11, 32);
+	j.nTime = 1700000000;
+	j.nBits = 0x207fffff;
+	j.height = 1;
+	j.txcount = 1;
+	for (i = 0; i < 12; i++) {
+		en12[i] = (uint8_t)(0xa0 + i);
+	}
+	datum_pow_v2_set_extranonce_from_en12(&j, en12);
+	datum_test(datum_pow_v2_build(&j));
+
+	datum_pow_v2_sia_coinb1(coinb1, j.h2);
+	datum_test(coinb1[0] == 0 && coinb1[1] == 0 && coinb1[2] == 0);
+	datum_test(memcmp(coinb1 + 3, j.h2, 32) == 0);
+	datum_test(coinb1[35] == 0 && coinb1[38] == 0);
+
+	datum_test(datum_pow_v2_mid_from_sia_en12(mid_sia, j.h2, en12));
+	datum_test(memcmp(mid_sia, j.mid, 32) == 0);
+}
+
 void datum_pow_v2_tests(void)
 {
 	test_blake2b_rfc_vectors();
@@ -177,4 +209,5 @@ void datum_pow_v2_tests(void)
 	test_sia_nonce_map_and_profile1();
 	test_use_time_offset_rebuilds_mid();
 	test_parse_hex_le();
+	test_sia_coinb1_mid_matches_build();
 }

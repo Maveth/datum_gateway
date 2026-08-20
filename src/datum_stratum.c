@@ -1264,11 +1264,10 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 			                 : (empty_work ? 1 : (uint16_t)(job->block_template->txn_count + 1));
 			v2.flags = job->pow_v2_reserved; /* m_flags */
 			v2.clear_bits = job->pow_v2_clear_bits;
-			memcpy(v2.extranonce, job->pow_v2_extranonce, 16);
+			/* PoW m_extranonce = 4×0x00 || Sv1 en12 (sid_inv||en2) — matches Sia leaf mid */
+			datum_pow_v2_set_extranonce_from_en12(&v2, extranonce_bin);
 			memcpy(v2.xor_key, job->pow_v2_xor_key, 16);
 			memcpy(v2.mm_rhs, job->pow_v2_mm_rhs, 32);
-			memcpy(v2.mid, job->pow_v2_mid, 32);
-			memcpy(v2.mask, job->pow_v2_mask, 32);
 
 			nonce8 = datum_pow_v2_parse_hex_le_u64(nonce_s);
 			ntime8 = (ntime_s && strlen(ntime_s) == 16) ? datum_pow_v2_parse_hex_le_u64(ntime_s) : 0;
@@ -1622,26 +1621,28 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 	// We'll use the client's send buffer for sanity, since in this environment it wont result in a partial send and we can just build up the string in the output buffer
 
 		/*
-	 * Blake2b V2 miner notify (Sia-class / ASIC-shaped work).
+	 * Blake2b V2 notify — two wire dialects, one GetHash:
 	 *
-	 * params: [job_id, prev, mid, "", [], version, nbits, ntime8, clean]
-	 * header80 for miner: prev || nonce8_le || ntime8_le || mid
+	 * SIA_SV1 (default): [job, prev_asic, coinb1_39hex, "", [], ver, nbits, ntime8, clean]
+	 *   Stock Sia GPU miners + A3/Goldshell: mid = Blake2b(0x00||coinb1||en1||en2)
 	 *
-	 * Dialect is provisional until OCEAN/Luke freeze the official pack.
-	 * nBits is the node template compact target (network difficulty).
+	 * LAB_MID: [job, prev_asic, mid32hex, "", [], ver, nbits, ntime8, clean]
+	 *   Lab GPU shortcut (precomputed mid); select via subscribe UA.
 	 */
 	if (j->pow_v2_ready) {
 		char jobidbuf[40];
 		char prev_hex[65];
-		char mid_hex[65];
+		char third_hex[DATUM_POW_V2_SIA_COINB1_LEN * 2 + 4];
 		unsigned int cbs = 0;
 		int pi;
 		datum_pow_v2_job v2n;
 		uint8_t dig[32];
 		uint8_t tmp[8192];
 		uint8_t en12[12];
+		uint8_t coinb1[DATUM_POW_V2_SIA_COINB1_LEN];
 		size_t L;
 		T_DATUM_STRATUM_COINBASE *cbn;
+		const char *third;
 
 		if (new_block) {
 			cbs = 255;
@@ -1652,57 +1653,68 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 			snprintf(jobidbuf, sizeof(jobidbuf), "%s%02x", j->job_id, cbs);
 		}
 		for (pi = 0; pi < 32; pi++) {
-			sprintf(&prev_hex[pi * 2], "%02x", j->pow_v2_prev_asic[pi]); /* profile0 hidden+cleared */
+			sprintf(&prev_hex[pi * 2], "%02x", j->pow_v2_prev_asic[pi]);
 		}
 		prev_hex[64] = 0;
 
-		/* Per-client mid: coinbase en = sid_inv || en2(0). Miner submits en2=0. */
-		memset(&v2n, 0, sizeof(v2n));
-		v2n.nVersion = (int32_t)(j->version_uint & 0x7fffffff);
-		memcpy(v2n.prev, j->prevhash_bin, 32);
 		memset(en12, 0, 12);
 		pk_u32le(en12, 0, m->sid_inv);
-		cbn = &j->subsidy_only_coinbase;
-		if (cbn->coinb1_len > 0 &&
-		    (size_t)cbn->coinb1_len + 12 + (size_t)cbn->coinb2_len < sizeof(tmp)) {
-			L = 0;
-			memcpy(tmp + L, cbn->coinb1_bin, cbn->coinb1_len);
-			L += (size_t)cbn->coinb1_len;
-			/* Match submit path: encode share PoT into coinbase before merkle/mid */
-			if (j->target_pot_index < cbn->coinb1_len) {
-				tmp[j->target_pot_index] = floorPoT(m->last_sent_diff ? m->last_sent_diff : 1);
-			}
-			memcpy(tmp + L, en12, 12);
-			L += 12;
-			memcpy(tmp + L, cbn->coinb2_bin, cbn->coinb2_len);
-			L += (size_t)cbn->coinb2_len;
-			double_sha256(dig, tmp, L);
-			if (j->merklebranch_count) {
-				stratum_job_merkle_root_calc(j, dig, v2n.merkle);
+
+		if (m->pow_dialect == DATUM_POW_DIALECT_LAB_MID) {
+			/* Precomputed mid (en2=0 lab contract). */
+			memset(&v2n, 0, sizeof(v2n));
+			v2n.nVersion = (int32_t)(j->version_uint & 0x7fffffff);
+			memcpy(v2n.prev, j->prevhash_bin, 32);
+			cbn = &j->subsidy_only_coinbase;
+			if (cbn->coinb1_len > 0 &&
+			    (size_t)cbn->coinb1_len + 12 + (size_t)cbn->coinb2_len < sizeof(tmp)) {
+				L = 0;
+				memcpy(tmp + L, cbn->coinb1_bin, cbn->coinb1_len);
+				L += (size_t)cbn->coinb1_len;
+				if (j->target_pot_index < cbn->coinb1_len) {
+					tmp[j->target_pot_index] = floorPoT(m->last_sent_diff ? m->last_sent_diff : 1);
+				}
+				memcpy(tmp + L, en12, 12);
+				L += 12;
+				memcpy(tmp + L, cbn->coinb2_bin, cbn->coinb2_len);
+				L += (size_t)cbn->coinb2_len;
+				double_sha256(dig, tmp, L);
+				if (j->merklebranch_count) {
+					stratum_job_merkle_root_calc(j, dig, v2n.merkle);
+				} else {
+					memcpy(v2n.merkle, dig, 32);
+				}
 			} else {
-				memcpy(v2n.merkle, dig, 32);
+				memcpy(v2n.merkle, j->pow_v2_merkle, 32);
 			}
+			v2n.nTime = (uint32_t)strtoul(j->ntime, NULL, 16);
+			v2n.nBits = j->nbits_uint;
+			v2n.height = (int32_t)j->height;
+			v2n.txcount = j->pow_v2_txcount ? j->pow_v2_txcount : 1;
+			v2n.flags = j->pow_v2_reserved;
+			v2n.clear_bits = j->pow_v2_clear_bits;
+			datum_pow_v2_set_extranonce_from_en12(&v2n, en12);
+			memcpy(v2n.xor_key, j->pow_v2_xor_key, 16);
+			memcpy(v2n.mm_rhs, j->pow_v2_mm_rhs, 32);
+			if (!datum_pow_v2_build(&v2n)) {
+				memcpy(third_hex, j->pow_v2_mid_hex, 65);
+			} else {
+				datum_pow_v2_bin_to_hex32(v2n.mid, third_hex);
+			}
+			third = third_hex;
 		} else {
-			memcpy(v2n.merkle, j->pow_v2_merkle, 32);
-		}
-		v2n.nTime = (uint32_t)strtoul(j->ntime, NULL, 16);
-		v2n.nBits = j->nbits_uint;
-		v2n.height = (int32_t)j->height;
-		v2n.txcount = j->pow_v2_txcount ? j->pow_v2_txcount : 1;
-		v2n.flags = j->pow_v2_reserved;
-		v2n.clear_bits = j->pow_v2_clear_bits;
-		memcpy(v2n.extranonce, j->pow_v2_extranonce, 16);
-		memcpy(v2n.xor_key, j->pow_v2_xor_key, 16);
-		memcpy(v2n.mm_rhs, j->pow_v2_mm_rhs, 32);
-		if (!datum_pow_v2_build(&v2n)) {
-			memcpy(mid_hex, j->pow_v2_mid_hex, 65);
-		} else {
-			datum_pow_v2_bin_to_hex32(v2n.mid, mid_hex);
+			/* SIA_SV1: stock Sia/A3 — miner builds mid from coinb1+en */
+			datum_pow_v2_sia_coinb1(coinb1, j->pow_v2_h2);
+			for (pi = 0; pi < DATUM_POW_V2_SIA_COINB1_LEN; pi++) {
+				sprintf(&third_hex[pi * 2], "%02x", coinb1[pi]);
+			}
+			third_hex[DATUM_POW_V2_SIA_COINB1_LEN * 2] = 0;
+			third = third_hex;
 		}
 
 		snprintf(s, sizeof(s),
 		         "{\"id\":null,\"method\":\"mining.notify\",\"params\":[\"%s\",\"%s\",\"%s\",\"\",[],\"%s\",\"%s\",\"%s\",%s]}\n",
-		         jobidbuf, prev_hex, mid_hex, j->version, j->nbits, j->pow_v2_ntime8,
+		         jobidbuf, prev_hex, third, j->version, j->nbits, j->pow_v2_ntime8,
 		         ((clean) || (quickdiff) || (new_block)) ? "true" : "false");
 		datum_socket_send_string_to_client(c, s);
 		m->last_sent_stratum_job_index = j->global_index;
@@ -1817,6 +1829,19 @@ int send_mining_set_difficulty(T_DATUM_CLIENT_DATA *c) {
 
 void datum_stratum_fingerprint_by_UA(T_DATUM_MINER_DATA *m) {
 	// TODO: Make this a little more efficient. perhaps move to a loadable definitions file of some kind.
+
+	/* Blake2b wire dialect: default Sia-Sv1 (stock GPU Sia miners + ASICs).
+	 * Lab mid dialect only when UA asks (our GPU/lab controllers). */
+	m->pow_dialect = DATUM_POW_DIALECT_SIA_SV1;
+	if (m->useragent[0]) {
+		if (strstr(m->useragent, "gpu-lab") ||
+		    strstr(m->useragent, "bip110-lab") ||
+		    strstr(m->useragent, "sia-class-frozen") ||
+		    strstr(m->useragent, "mid-lab") ||
+		    strstr(m->useragent, "bip110-gpu")) {
+			m->pow_dialect = DATUM_POW_DIALECT_LAB_MID;
+		}
+	}
 	
 	// S21 tested to handle 2.25KB coinbase work on all versions released
 	// UA starts with: Antminer S21/
@@ -1901,6 +1926,7 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	m->coinbase_selection = 2;
 	
 	m->useragent[0] = 0;
+	m->pow_dialect = DATUM_POW_DIALECT_SIA_SV1; /* stock Sia GPU + ASIC default */
 	if (params_obj) {
 		if (json_is_array(params_obj)) {
 			useragent = json_array_get(params_obj, 0);
@@ -1908,6 +1934,17 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 				strncpy_uachars(m->useragent, json_string_value(useragent), 127); // strip some chars
 				m->useragent[127] = 0;
 			}
+		}
+	}
+
+	/* Always pick Blake2b dialect from UA; optional fingerprint also sets coinbase size. */
+	if (m->useragent[0]) {
+		if (strstr(m->useragent, "gpu-lab") ||
+		    strstr(m->useragent, "bip110-lab") ||
+		    strstr(m->useragent, "sia-class-frozen") ||
+		    strstr(m->useragent, "mid-lab") ||
+		    strstr(m->useragent, "bip110-gpu")) {
+			m->pow_dialect = DATUM_POW_DIALECT_LAB_MID;
 		}
 	}
 	
@@ -2250,6 +2287,7 @@ static void bip110_pow_v2_fill_job(T_DATUM_STRATUM_JOB *s)
 
 	memcpy(s->pow_v2_mid, v2.mid, 32);
 	memcpy(s->pow_v2_prev_asic, v2.prev_asic, 32);
+	memcpy(s->pow_v2_h2, v2.h2, 32);
 	memcpy(s->pow_v2_mask, v2.mask, 32);
 	memcpy(s->pow_v2_merkle, v2.merkle, 32);
 	memcpy(s->pow_v2_extranonce, v2.extranonce, 16);

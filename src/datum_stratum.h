@@ -180,6 +180,7 @@ typedef struct {
 	bool pow_v2_ready;
 	uint8_t pow_v2_mid[32];
 	uint8_t pow_v2_prev_asic[32]; /* profile0 grind prev (hidden+cleared) */
+	uint8_t pow_v2_h2[32]; /* merge-mine hook hash — Sv1 coinb1 payload */
 	uint8_t pow_v2_mask[32];
 	uint8_t pow_v2_merkle[32];
 	uint8_t pow_v2_extranonce[16];
@@ -191,6 +192,12 @@ typedef struct {
 	char pow_v2_ntime8[17];
 	char pow_v2_mid_hex[65];
 } T_DATUM_STRATUM_JOB;
+
+/* Per-connection Stratum Blake2b packing (same GetHash / node). */
+typedef enum {
+	DATUM_POW_DIALECT_SIA_SV1 = 0, /* default: stock Sia GPU miners + A3/Goldshell */
+	DATUM_POW_DIALECT_LAB_MID = 1, /* lab shortcut: prev_asic + mid32 precomputed */
+} datum_pow_dialect_t;
 
 typedef struct T_DATUM_STRATUM_THREADPOOL_DATA {
 	T_DATUM_STRATUM_JOB *cur_stratum_job;
@@ -269,6 +276,9 @@ typedef struct {
 	uint64_t forced_high_min_diff;
 	
 	int last_sent_stratum_job_index;
+
+	/* Blake2b notify/submit dialect for this connection (default Sia-Sv1). */
+	datum_pow_dialect_t pow_dialect;
 	
 	T_DATUM_STRATUM_USER_STATS stats;
 	
