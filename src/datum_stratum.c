@@ -1162,7 +1162,17 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	}
 	
 	memcpy(&full_cb_txn[0], cb->coinb1_bin, cb->coinb1_len);
-	memcpy(&full_cb_txn[cb->coinb1_len], extranonce_bin, 12);
+	/*
+	 * Blake2b V2: merkle/h2/coinb1 are frozen at job fill (zeros in the 12B
+	 * coinbase extranonce slot). Stratum en1||en2 must ONLY feed m_extranonce
+	 * for mid — if we also put varying en2/PoT into the coinbase here, merkle
+	 * changes, h2≠announced coinb1, and stock Sia miners get high-hash.
+	 */
+	if (job->pow_v2_ready) {
+		memset(&full_cb_txn[cb->coinb1_len], 0, 12);
+	} else {
+		memcpy(&full_cb_txn[cb->coinb1_len], extranonce_bin, 12);
+	}
 	memcpy(&full_cb_txn[cb->coinb1_len+12], cb->coinb2_bin, cb->coinb2_len);
 	
 	// if we did a quickdiff work, we need to change our extra data just a little so it's unique.
@@ -1176,15 +1186,17 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	// we must encode the current diff directly into the PoW.  This allows remote DATUM servers to accept
 	// our variable difficulty work (subject to the DATUM server provided global minimum)
 	
-	if (quickdiff) {
-		if (upk_u16le(full_cb_txn, cb->coinb1_len - 2) != 0x5144) {
-			pk_u16le(full_cb_txn, cb->coinb1_len - 2, 0x5144);
+	if (!job->pow_v2_ready) {
+		if (quickdiff) {
+			if (upk_u16le(full_cb_txn, cb->coinb1_len - 2) != 0x5144) {
+				pk_u16le(full_cb_txn, cb->coinb1_len - 2, 0x5144);
+			} else {
+				pk_u16le(full_cb_txn, cb->coinb1_len - 2, 0xAEBB);
+			}
+			full_cb_txn[job->target_pot_index] = floorPoT(m->quickdiff_value);
 		} else {
-			pk_u16le(full_cb_txn, cb->coinb1_len - 2, 0xAEBB);
+			full_cb_txn[job->target_pot_index] = floorPoT(m->stratum_job_diffs[g_job_index]);
 		}
-		full_cb_txn[job->target_pot_index] = floorPoT(m->quickdiff_value);
-	} else {
-		full_cb_txn[job->target_pot_index] = floorPoT(m->stratum_job_diffs[g_job_index]);
 	}
 	
 	if ((job->merklebranch_count) && (!empty_work)) {
@@ -1252,8 +1264,9 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 			memset(&v2, 0, sizeof(v2));
 			v2.nVersion = (int32_t)(bver & 0x7fffffff);
 			memcpy(v2.prev, job->prevhash_bin, 32);
-			/* Wire merkle from reconstructed coinbase (share path above) */
-			memcpy(v2.merkle, &block_header[36], 32);
+			/* Frozen job merkle (matches announced coinb1/h2) — not en2-varying CB */
+			memcpy(v2.merkle, job->pow_v2_merkle, 32);
+			memcpy(&block_header[36], job->pow_v2_merkle, 32);
 			/* Block timestamp from job template (not Sia ntime8 grind slot) */
 			v2.nTime = (uint32_t)strtoul(job->ntime, NULL, 16);
 			/* Network nBits from node template */
