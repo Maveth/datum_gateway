@@ -73,6 +73,12 @@ mining.notify:
 
 Both rebuild the same tip GetHash on submit (`m_extranonce = 4×0x00 || sid_inv||en2`).
 
+**Merkle freeze:** `pow_v2_merkle` / h2 / coinb1 are frozen at job fill from
+`subsidy_only_coinbase` + 12×0x00 EN (+ template branches). Stratum en2 must
+**not** mutate the Bitcoin coinbase (it only feeds `m_extranonce`). Block
+assemble always uses that same subsidy coinbase so the node accepts
+(`bad-txnmrklroot` otherwise).
+
 ```text
 mining.submit:
   [user, job_id, extranonce2, ntime8_hex, nonce8_hex]

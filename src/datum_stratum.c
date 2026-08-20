@@ -1149,7 +1149,13 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 		}
 	}
 	
-	if (empty_work) {
+	/*
+	 * Blake2b V2: bip110_pow_v2_fill_job freezes pow_v2_merkle from
+	 * subsidy_only_coinbase + 12×0x00 EN (+ template merkle branches).
+	 * Submit must assemble that same coinbase (and same txn set) or the node
+	 * rejects with bad-txnmrklroot while the share PoW still validates.
+	 */
+	if (job->pow_v2_ready || empty_work) {
 		cb = &job->subsidy_only_coinbase;
 	} else {
 		cb = &job->coinbase[coinbase_index];
@@ -1332,7 +1338,15 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 		DLOG_WARN("******** BLOCK FOUND - %s ********",new_notify_blockhash);
 		DLOG_WARN("************************************************************************************************");
 		
-		i = assembleBlockAndSubmit(block_header, full_cb_txn, cb->coinb1_len+12+cb->coinb2_len, job, m->sdata, new_notify_blockhash, empty_work);
+		{
+			/* V2 fill baked template branches into pow_v2_merkle — never drop them
+			 * just because the job id had an N/empty prefix. */
+			bool assemble_empty = empty_work;
+			if (job->pow_v2_ready) {
+				assemble_empty = (job->merklebranch_count == 0);
+			}
+			i = assembleBlockAndSubmit(block_header, full_cb_txn, cb->coinb1_len+12+cb->coinb2_len, job, m->sdata, new_notify_blockhash, assemble_empty);
+		}
 		if (i) {
 			// successfully submitted
 			datum_blocktemplates_notifynew(new_notify_blockhash, job->height + 1);
@@ -2235,7 +2249,7 @@ void stratum_calculate_merkle_branches(T_DATUM_STRATUM_JOB *s) {
  * Miner pack (profile 0): 80B = prev || nonce8 || ntime8 || mid
  * Re-diff against pow_hf_blake2b when GetHash / profiles change.
  */
-static void bip110_pow_v2_fill_job(T_DATUM_STRATUM_JOB *s)
+void bip110_pow_v2_fill_job(T_DATUM_STRATUM_JOB *s)
 {
 	datum_pow_v2_job v2;
 	uint8_t dig[32];
@@ -2252,23 +2266,27 @@ static void bip110_pow_v2_fill_job(T_DATUM_STRATUM_JOB *s)
 	v2.nVersion = (int32_t)(s->version_uint & 0x7fffffff);
 	memcpy(v2.prev, s->prevhash_bin, 32);
 
-	/* Provisional merkle from subsidy coinbase + branches (refined on submit). */
+	/* Freeze merkle from subsidy coinbase + branches. Must match assemble. */
 	cb = &s->subsidy_only_coinbase;
-	if (cb->coinb1_len > 0 &&
-	    (size_t)cb->coinb1_len + 12 + (size_t)cb->coinb2_len < sizeof(tmp)) {
-		L = 0;
-		memcpy(tmp + L, cb->coinb1_bin, cb->coinb1_len);
-		L += (size_t)cb->coinb1_len;
-		memset(tmp + L, 0, 12);
-		L += 12;
-		memcpy(tmp + L, cb->coinb2_bin, cb->coinb2_len);
-		L += (size_t)cb->coinb2_len;
-		double_sha256(dig, tmp, L);
-		if (s->merklebranch_count) {
-			stratum_job_merkle_root_calc(s, dig, v2.merkle);
-		} else {
-			memcpy(v2.merkle, dig, 32);
-		}
+	if (cb->coinb1_len <= 0 ||
+	    (size_t)cb->coinb1_len + 12 + (size_t)cb->coinb2_len >= sizeof(tmp)) {
+		DLOG_ERROR("bip110: subsidy_only coinbase missing; cannot freeze V2 merkle height=%lu",
+		           (unsigned long)s->height);
+		s->pow_v2_ready = false;
+		return;
+	}
+	L = 0;
+	memcpy(tmp + L, cb->coinb1_bin, cb->coinb1_len);
+	L += (size_t)cb->coinb1_len;
+	memset(tmp + L, 0, 12);
+	L += 12;
+	memcpy(tmp + L, cb->coinb2_bin, cb->coinb2_len);
+	L += (size_t)cb->coinb2_len;
+	double_sha256(dig, tmp, L);
+	if (s->merklebranch_count) {
+		stratum_job_merkle_root_calc(s, dig, v2.merkle);
+	} else {
+		memcpy(v2.merkle, dig, 32);
 	}
 
 	v2.nTime = (uint32_t)strtoul(s->ntime, NULL, 16);
