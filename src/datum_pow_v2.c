@@ -1,6 +1,6 @@
 /*
  * datum_pow_v2.c — Blake2b V2 host construction (DATUM side)
- * Aligned to pow_hf_blake2b @ 5a3f788e84 (GetHash == ca52286218; h1 u8 reserved → 119B)
+ * Aligned to pow_hf_blake2b @ 858daec725 (h1 uses GetCompleteVersion; u8 reserved → 119B)
  */
 
 #include "datum_pow_v2.h"
@@ -125,6 +125,10 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	if (sodium_init() < 0) {
 		return false;
 	}
+	/* Tip 858daec725: top two m_flags bits reserved (future hardforks). */
+	if (j->flags & 0xc0) {
+		return false;
+	}
 
 	tagged_sha256("Bitcoin block hash PoW XOR key", j->xor_key, 16, xor_key_hash);
 
@@ -156,9 +160,9 @@ bool datum_pow_v2_build(datum_pow_v2_job *j)
 	/* Hide tip from silicon: hash the ordered prev */
 	tagged_sha256("Bitcoin prevblock header, hashed", prev_ordered, 32, prev_hidden);
 
-	/* h1 @ ca522862: … time_on_wire || u8(0) || nBits … (119B; was u32 reserved → 122) */
+	/* h1 @ 858daec725: GetCompleteVersion()‖prev‖…‖u8(0)‖… (119B) */
 	o = 0;
-	write_u32_le(h1msg + o, (uint32_t)j->nVersion);
+	write_u32_le(h1msg + o, 0x80000000u | ((uint32_t)j->nVersion & 0x7fffffffu));
 	o += 4;
 	memcpy(h1msg + o, prev_ordered, 32);
 	o += 32;

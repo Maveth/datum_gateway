@@ -7,7 +7,7 @@
  *
  * Mirrors CBlockHeader::GetHash() from luke-jr/bitcoin pow_hf_blake2b.
  *
- * Aligned tip: 5a3f788e84 (GetHash same as ca52286218)
+ * Aligned tip: 858daec725 (h1 = GetCompleteVersion; flags high bits forbidden)
  *   - h1 includes ReversedBytes(prev); reserved time is uint8_t (119B payload)
  *   - prevblock_hidden = TaggedHash("Bitcoin prevblock header, hashed")
  *   - profile 0 ASIC: hidden prev with first 6 bytes cleared

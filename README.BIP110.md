@@ -97,8 +97,8 @@ mining.submit:
 ### Freeze tip
 
 ```text
-luke-jr/bitcoin  pow_hf_blake2b  @ 5a3f788e84
-  (GetHash identical to ca52286218; tip also WrappingAdd/Sub for time_offset)
+luke-jr/bitcoin  pow_hf_blake2b  @ 858daec725
+  (h1 uses GetCompleteVersion / 0x80000000|nVersion; m_flags&0xc0 forbidden)
 
 GetHash notes:
   - h1: version‖prev_ordered‖height‖merkle‖time‖u8(0)… (119B; was 122)
