@@ -60,8 +60,8 @@ const char *cbstart_hex = "01000000010000000000000000000000000000000000000000000
 
 #define MAX_COINBASE_TAG_SPACE 86 // leaves space for BIP34 height, extranonces, datum prime tag, etc.
 
-/* Set from GBT aux / lab config — must appear in first Blake2b coinbase */
-static uint8_t bip110_headline_bin[128];
+/* Set from GBT aux / mining.blake2b_headline — must appear in activation coinbase */
+static uint8_t bip110_headline_bin[256];
 static uint16_t bip110_headline_len = 0;
 
 void datum_bip110_set_headline(const uint8_t *b, uint16_t n)
@@ -184,9 +184,14 @@ int generate_coinbase_input(int height, char *cb, int *target_pot_index) {
 		uchar_to_hex(&cb[i], 0x00); i+=2; cb_input_sz++;
 	}
 	
-	/* Consensus: first Blake2b block must contain blake2b_headline bytes */
-	if (bip110_headline_len > 0 && bip110_headline_len < 75) {
-		uchar_to_hex(&cb[i], (unsigned char)bip110_headline_len); i += 2; cb_input_sz++;
+	/* Consensus: Blake2b activation coinbase must contain headline bytes (any length ≤255). */
+	if (bip110_headline_len > 0 && bip110_headline_len <= 255) {
+		if (bip110_headline_len <= 75) {
+			uchar_to_hex(&cb[i], (unsigned char)bip110_headline_len); i += 2; cb_input_sz++;
+		} else {
+			uchar_to_hex(&cb[i], 0x4C); i += 2; cb_input_sz++; /* OP_PUSHDATA1 */
+			uchar_to_hex(&cb[i], (unsigned char)bip110_headline_len); i += 2; cb_input_sz++;
+		}
 		for (m = 0; m < bip110_headline_len; m++) {
 			uchar_to_hex(&cb[i], bip110_headline_bin[m]); i += 2; cb_input_sz++;
 		}
@@ -446,10 +451,11 @@ void generate_base_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool ne
 		
 		/* Always build subsidy_only — Blake2b V2 freezes merkle from it on every
 		 * job (empty and full). Previously only new_block did this, so priority
-		 * jobs left pow_v2_merkle=0 → node bad-txnmrklroot on block submit. */
+		 * jobs left pow_v2_merkle=0 → node bad-txnmrklroot on block submit.
+		 * Include witness commit (not "just us"): V2 may attach template txs. */
 		memcpy(&s->subsidy_only_coinbase.coinb1[0], &s->coinbase[0].coinb1[0], cb1idx[0]);
 		pk_u64le(s->subsidy_only_coinbase.coinb2, 0, 0x6666666666666666ULL);  // "ffffffff"
-		append_bitcoin_varint_hex(1, &s->subsidy_only_coinbase.coinb2[8]); // just us!
+		append_bitcoin_varint_hex(2, &s->subsidy_only_coinbase.coinb2[8]); // us + witness commit
 	} else {
 		// we're already at the point in coinb1 where we need an output count, which will be 3
 		j = cb1idx[0];
@@ -459,7 +465,7 @@ void generate_base_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool ne
 		cb1idx[0] += sprintf(&s->coinbase[0].coinb1[cb1idx[0]], "0000000000000000106a0e%04" PRIx16, s->enprefix);
 		
 		memcpy(&s->subsidy_only_coinbase.coinb1[0], &s->coinbase[0].coinb1[0], cb1idx[0]);
-		k = append_bitcoin_varint_hex(2, &s->subsidy_only_coinbase.coinb1[j]); // extranonce and us
+		k = append_bitcoin_varint_hex(3, &s->subsidy_only_coinbase.coinb1[j]); // extranonce, us, witness
 		s->subsidy_only_coinbase.coinb1[j+k] = s->coinbase[0].coinb1[j+k];
 	}
 	// finish off "empty" coinbase
@@ -482,10 +488,15 @@ void generate_base_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool ne
 	// lock time
 	cb2idx[0] += sprintf(&s->coinbase[0].coinb2[cb2idx[0]], "00000000");
 	
-	// Append the subsidy-only payout to the subsidy_only_coinbase
-	sprintf(&s->subsidy_only_coinbase.coinb2[j], "%016llx", (unsigned long long)__builtin_bswap64(block_reward(s->height))); // subsidy calc for height
+	/* subsidy_only: subsidy value + same payout script, then same witness commit + locktime as CB0.
+	 * Omitting the commit caused Knots unexpected-witness when V2 attached template txs. */
+	sprintf(&s->subsidy_only_coinbase.coinb2[j], "%016llx", (unsigned long long)__builtin_bswap64(block_reward(s->height)));
 	memcpy(&s->subsidy_only_coinbase.coinb2[j+16], &s->coinbase[0].coinb2[j+16], k-j-16);
-	sprintf(&s->subsidy_only_coinbase.coinb2[k], "00000000");
+	{
+		size_t rem = strlen(&s->coinbase[0].coinb2[k]);
+		memcpy(&s->subsidy_only_coinbase.coinb2[k], &s->coinbase[0].coinb2[k], rem);
+		s->subsidy_only_coinbase.coinb2[k + rem] = 0;
+	}
 	
 	// End of 0 / Empty
 	//////////////////////////////
@@ -638,10 +649,10 @@ void generate_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool empty_o
 		cb2idx[0] += append_bitcoin_varint_hex(2, &s->coinbase[0].coinb2[cb2idx[0]]); // us and witness commit
 		
 		if (empty_only) {
-			// copy the beginning to the subsidy-only
+			// copy the beginning to the subsidy-only (include witness commit — see V2 note above)
 			memcpy(&s->subsidy_only_coinbase.coinb1[0], &s->coinbase[0].coinb1[0], cb1idx[0]);
 			pk_u64le(s->subsidy_only_coinbase.coinb2, 0, 0x6666666666666666ULL);  // "ffffffff"
-			append_bitcoin_varint_hex(1, &s->subsidy_only_coinbase.coinb2[8]); // just us!
+			append_bitcoin_varint_hex(2, &s->subsidy_only_coinbase.coinb2[8]); // us + witness commit
 		}
 	} else {
 		// we're already at the point in coinb1 where we need an output count, which will be 3
@@ -656,7 +667,7 @@ void generate_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool empty_o
 		if (empty_only) {
 			// copy the beginning to the subsidy-only
 			memcpy(&s->subsidy_only_coinbase.coinb1[0], &s->coinbase[0].coinb1[0], cb1idx[0]);
-			k = append_bitcoin_varint_hex(2, &s->subsidy_only_coinbase.coinb1[j]); // extranonce and us
+			k = append_bitcoin_varint_hex(3, &s->subsidy_only_coinbase.coinb1[j]); // extranonce, us, witness
 			s->subsidy_only_coinbase.coinb1[j+k] = s->coinbase[0].coinb1[j+k];
 		}
 	}
@@ -685,10 +696,14 @@ void generate_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool empty_o
 	cb2idx[0] += sprintf(&s->coinbase[0].coinb2[cb2idx[0]], "00000000");
 	
 	if (empty_only) {
-		// Append the subsidy-only payout to the subsidy_only_coinbase
-		sprintf(&s->subsidy_only_coinbase.coinb2[j], "%016llx", (unsigned long long)__builtin_bswap64(block_reward(s->height))); // subsidy calc for height
+		/* subsidy_only: payout + witness commit + locktime (same as CB0 tail) */
+		sprintf(&s->subsidy_only_coinbase.coinb2[j], "%016llx", (unsigned long long)__builtin_bswap64(block_reward(s->height)));
 		memcpy(&s->subsidy_only_coinbase.coinb2[j+16], &s->coinbase[0].coinb2[j+16], k-j-16);
-		sprintf(&s->subsidy_only_coinbase.coinb2[k], "00000000");
+		{
+			size_t rem = strlen(&s->coinbase[0].coinb2[k]);
+			memcpy(&s->subsidy_only_coinbase.coinb2[k], &s->coinbase[0].coinb2[k], rem);
+			s->subsidy_only_coinbase.coinb2[k + rem] = 0;
+		}
 	}
 	
 	// End of 0 / Empty

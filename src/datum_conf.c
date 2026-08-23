@@ -123,10 +123,15 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 	{ .var_type = DATUM_CONF_STRING, 	.category = "mining", 		.name = "coinbase_tag_secondary",	.description = "Text to have in the secondary coinbase tag (Short name/identifier)",
 		.example_default = true,
 		.required = false, .ptr = datum_config.mining_coinbase_tag_secondary,			.default_string[0] = "DATUM User", .max_string_len = sizeof(datum_config.mining_coinbase_tag_secondary) },
+	{ .var_type = DATUM_CONF_STRING, 	.category = "mining", 		.name = "blake2b_headline",		.description = "News headline bytes that must appear in the Blake2b activation coinbase (fallback if GBT coinbaseaux omits it; must match bitcoind -blake2b_headline)",
+		.example = "\"current Discord #global-news-headlines string\"",
+		.required = false, .ptr = datum_config.mining_blake2b_headline,				.default_string[0] = "", .max_string_len = sizeof(datum_config.mining_blake2b_headline) },
 	{ .var_type = DATUM_CONF_INT, 		.category = "mining", 		.name = "coinbase_unique_id",		.description = "A unique ID between 1 and 65535. This is appended to the coinbase. Make unique per instance of datum with the same coinbase tags.",
 		.required = false, .ptr = &datum_config.coinbase_unique_id, 		.default_int = 4242 },
 	{ .var_type = DATUM_CONF_STRING, 	.category = "mining", 		.name = "save_submitblocks_dir",	.description = "Directory to save all submitted blocks to as submitblock JSON files",
 		.required = false, .ptr = datum_config.mining_save_submitblocks_dir,			.default_string[0] = "", .max_string_len = sizeof(datum_config.mining_save_submitblocks_dir) },
+	{ .var_type = DATUM_CONF_BOOL, 		.category = "mining", 		.name = "allow_submitblock",		.description = "If false, do not call bitcoind submitblock (shares still accepted locally)",
+		.required = false, .ptr = &datum_config.mining_allow_submitblock,			.default_bool = true },
 	
 	// API/dashboard
 	{ .var_type = DATUM_CONF_STRING, 	.category = "api",	 		.name = "admin_password",			.description = "API password for actions/changes (username 'admin'; disabled if blank)",

@@ -251,7 +251,6 @@ void datum_api_var_STRATUM_JOB_TXNCOUNT(char *buffer, size_t buffer_size, const 
 	snprintf(buffer, buffer_size, "%u", (unsigned)vardata->sjob->block_template->txn_count);
 }
 
-
 DATUM_API_VarEntry var_entries[] = {
 	{"STRATUM_SHARES_ACCEPTED", datum_api_var_STRATUM_SHARES_ACCEPTED},
 	{"STRATUM_SHARES_REJECTED", datum_api_var_STRATUM_SHARES_REJECTED},
@@ -1844,7 +1843,7 @@ enum MHD_Result datum_api_answer(void *cls, struct MHD_Connection *connection, c
 			}
 			break;
 		}
-		
+
 		case 't': {
 			if (!strcmp(url, "/threads")) {
 				return datum_api_thread_dashboard(connection);

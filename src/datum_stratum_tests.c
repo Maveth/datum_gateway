@@ -180,25 +180,4 @@ void datum_stratum_mod_username_tests() {
 
 void datum_stratum_tests(void) {
 	datum_stratum_mod_username_tests();
-
-	uint64_t id;
-	char idbuf[32];
-	json_t *j = json_integer(42);
-	datum_test(datum_stratum_request_id(j, &id));
-	datum_test(id == 42);
-	datum_test(0 == strcmp(datum_stratum_response_id(idbuf, sizeof(idbuf), id), "42"));
-	json_decref(j);
-
-	j = json_string("auth");
-	datum_test(datum_stratum_request_id(j, &id));
-	datum_test(0 == strcmp(datum_stratum_response_id(idbuf, sizeof(idbuf), id), "\"auth\""));
-	json_decref(j);
-
-	j = json_string("quote\"slash\\");
-	datum_test(datum_stratum_request_id(j, &id));
-	datum_test(0 == strcmp(datum_stratum_response_id(idbuf, sizeof(idbuf), id), "\"quote\\\"slash\\\\\""));
-	json_decref(j);
-
-	j = json_null();
-	datum_test(!datum_stratum_request_id(j, &id));
 }

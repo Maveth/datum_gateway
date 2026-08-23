@@ -159,3 +159,53 @@ Per Luke: **bdiff→pdiff**, optionally ignore xor_key early. String JSON-RPC id
 ## Status
 
 Lab-proven on private regtest against a Blake2b PR node (share/block via host path; tip advance). Official miner dialect may still evolve.
+
+---
+
+## Solo vs pooled (important)
+
+This repository is a **Blake2b-only DATUM Gateway**. It is the software that sits next to **your** node and speaks Stratum to **your** miners.
+
+### 1) Solo / non-pooled (default for most home miners)
+
+Leave the pool client off:
+
+\\\json
+" datum\: {
+ \pool_host\: \\,
+ \pooled_mining_only\: false
+}
+\\\
+
+- Miners → **this Gateway** (e.g. \ cp://YOUR_LAN_IP:23334\ or your chosen stratum port)
+- Coinbase pays \mining.pool_address\ (100% solo)
+- **No** \pool_pubkey\ required
+- This is the **raw Blake2b-only** path — use it if other forks/dialects are breaking your miners
+
+### 2) Optional: Gateway as a *pool client* (not a pool server)
+
+To share work with a TIDES-style pool, point **this same Gateway** at a DATUM Prime:
+
+\\\json
+\datum\: {
+ \pool_host\: \tides.maveth.ca\,
+ \pool_port\: 28916,
+ \pool_pubkey\: \\,
+ \pooled_mining_only\: false
+}
+\\\
+
+- Empty \pool_pubkey\ auto-fetches from \https://<pool_host>/api/pool_pubkey\ on MaVeTh lab builds
+- Or paste the 128-hex pubkey from the pool operator
+- Miners still point at **your** Gateway — never at someone else's stratum \DATUM2\
+
+**This repo does not include a mining pool / TIDES payout server.** 
+For the pool side (Prime + share log + stats), see **https://github.com/Maveth/tides-pool**.
+
+### Lab extras in this tree
+
+- TN4/testnet address display in the Gateway UI (\m\/\
+\ not mainnet \1...\)
+- Sia-Sv1 Blake notify dialect (default) + lab-mid UA opt-in
+- Pubkey auto-fetch when \pool_pubkey\ is empty
+

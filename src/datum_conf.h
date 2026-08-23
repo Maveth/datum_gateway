@@ -127,8 +127,12 @@ typedef struct {
 	char mining_pool_address[256];
 	char mining_coinbase_tag_primary[64];
 	char mining_coinbase_tag_secondary[64];
+	/* Consensus headline for Blake2b activation coinbase (GBT aux preferred when present). */
+	char mining_blake2b_headline[256];
 	char mining_save_submitblocks_dir[256];
 	int coinbase_unique_id;
+	/* When false, assemble/log blocks but do not RPC submitblock (autoswitch gate). */
+	bool mining_allow_submitblock;
 	
 	char api_admin_password[72];
 	size_t api_admin_password_len;

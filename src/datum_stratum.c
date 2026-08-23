@@ -2355,8 +2355,11 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	}
 	s->prevhash[64] = 0;
 	
-	snprintf(s->version, sizeof(s->version), "%8.8x", block_template->version);
-	s->version_uint = block_template->version;
+	/* Stratum/Sia miners expect classic version hex (e.g. 20000000). Luke GBT
+	 * may return GetCompleteVersion with 0x80000000 set — keep that bit out of
+	 * the wire field; GetHash still ORs it back in datum_pow_v2_header/build. */
+	s->version_uint = (uint32_t)block_template->version & 0x7fffffffu;
+	snprintf(s->version, sizeof(s->version), "%8.8x", (unsigned)s->version_uint);
 	strncpy(s->nbits, block_template->bits, sizeof(s->nbits) - 1);
 	
 	// TODO: Should we use local time, and just verify is valid for the block?
@@ -2367,11 +2370,14 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	// Set the coinbase value of this job based on the template
 	s->coinbase_value = block_template->coinbasevalue;
 	s->height = block_template->height;
+	/* Prefer GBT aux (node -blake2b_headline at activation); else mining.blake2b_headline. */
 	if (block_template->blake2b_headline_len) {
 		datum_bip110_set_headline(block_template->blake2b_headline_bin, block_template->blake2b_headline_len);
-	} else if (datum_config.mining_coinbase_tag_primary[0]) {
-		datum_bip110_set_headline((const uint8_t *)datum_config.mining_coinbase_tag_primary,
-		                         (uint16_t)strlen(datum_config.mining_coinbase_tag_primary));
+	} else if (datum_config.mining_blake2b_headline[0]) {
+		datum_bip110_set_headline((const uint8_t *)datum_config.mining_blake2b_headline,
+		                         (uint16_t)strlen(datum_config.mining_blake2b_headline));
+	} else {
+		datum_bip110_set_headline(NULL, 0);
 	}
 
 	s->block_template = block_template;
@@ -2506,9 +2512,27 @@ int assembleBlockAndSubmit(uint8_t *block_header, uint8_t *coinbase_txn, size_t 
 		ptr += append_bitcoin_varint_hex(1, ptr);
 	}
 	
-	// copy coinbase txn
-	for(i=0;i<coinbase_txn_size;i++) {
-		ptr += sprintf(ptr, "%2.2x", coinbase_txn[i]);
+	/* Coinbase wire form for segwit: version | 00 01 | vin/vout | witness(32×0) | locktime.
+	 * GBT txs include witness; without this Knots returns bad-witness-nonce-size / unexpected-witness. */
+	if (coinbase_txn_size >= 8) {
+		for (i = 0; i < 4; i++) {
+			ptr += sprintf(ptr, "%2.2x", coinbase_txn[i]);
+		}
+		ptr += sprintf(ptr, "0001");
+		for (i = 4; i < (int)coinbase_txn_size - 4; i++) {
+			ptr += sprintf(ptr, "%2.2x", coinbase_txn[i]);
+		}
+		ptr += sprintf(ptr, "0120");
+		for (i = 0; i < 32; i++) {
+			ptr += sprintf(ptr, "00");
+		}
+		for (i = (int)coinbase_txn_size - 4; i < (int)coinbase_txn_size; i++) {
+			ptr += sprintf(ptr, "%2.2x", coinbase_txn[i]);
+		}
+	} else {
+		for (i = 0; i < coinbase_txn_size; i++) {
+			ptr += sprintf(ptr, "%2.2x", coinbase_txn[i]);
+		}
 	}
 	
 	if (!empty_work) {
@@ -2527,6 +2551,14 @@ int assembleBlockAndSubmit(uint8_t *block_header, uint8_t *coinbase_txn, size_t 
 	
 	// logging function will truncate the output
 	DLOG_DEBUG("Block Payload: %s", submitblock_req);
+
+	if (!datum_config.mining_allow_submitblock) {
+		DLOG_WARN("mining.allow_submitblock=false — NOT submitting block %s to bitcoind (autoswitch gate)", block_hash_hex);
+		if (free_submitblock_req) {
+			free(submitblock_req);
+		}
+		return 0;
+	}
 	
 	// Trigger our redundant submission thread
 	datum_submitblock_trigger(submitblock_req, block_hash_hex);
