@@ -951,6 +951,42 @@ uint64_t stratum_client_accepted_share_count = 0;
 uint64_t stratum_client_accepted_share_diff = 0;
 uint64_t stratum_client_rejected_share_count = 0;
 uint64_t stratum_client_rejected_share_diff = 0;
+uint64_t stratum_best_share_diff = 0;
+char stratum_best_share_user[192] = {0};
+
+/* Persist best-share diff so Status survives Gateway restarts. */
+static const char *stratum_best_share_path(void) {
+	const char *p = getenv("DATUM_BEST_SHARE_FILE");
+	return (p && p[0]) ? p : "/var/log/datum/best_share.txt";
+}
+
+static void stratum_best_share_load(void) {
+	FILE *f = fopen(stratum_best_share_path(), "r");
+	if (!f) return;
+	unsigned long long best = 0;
+	char user[192];
+	user[0] = 0;
+	if (fscanf(f, "%llu %191s", &best, user) >= 1 && best > 0) {
+		__atomic_store_n(&stratum_best_share_diff, (uint64_t)best, __ATOMIC_RELAXED);
+		if (user[0]) {
+			snprintf(stratum_best_share_user, sizeof(stratum_best_share_user), "%s", user);
+		}
+		DLOG_INFO("Loaded best share diff ~%" PRIu64 " from %s", (uint64_t)best, stratum_best_share_path());
+	}
+	fclose(f);
+}
+
+static void stratum_best_share_save(uint64_t best, const char *user) {
+	FILE *f = fopen(stratum_best_share_path(), "w");
+	if (!f) return;
+	fprintf(f, "%" PRIu64 " %s\n", best, (user && user[0]) ? user : "-");
+	fclose(f);
+}
+
+__attribute__((constructor)) static void stratum_best_share_autoload(void) {
+	stratum_best_share_load();
+}
+
 
 static void stratum_note_share(T_DATUM_MINER_DATA *m, bool accepted, uint64_t diff) {
 	if (accepted) {
@@ -963,6 +999,27 @@ static void stratum_note_share(T_DATUM_MINER_DATA *m, bool accepted, uint64_t di
 		m->share_diff_rejected += diff;
 		__atomic_add_fetch(&stratum_client_rejected_share_count, 1, __ATOMIC_RELAXED);
 		__atomic_add_fetch(&stratum_client_rejected_share_diff, diff, __ATOMIC_RELAXED);
+	}
+}
+
+/* Cheap Diff1 approx -> update per-client + global best share (INFO only on new high). */
+static void stratum_note_best_share(T_DATUM_MINER_DATA *m, const unsigned char *share_hash, const char *username) {
+	if (!share_hash || !m) return;
+	long double ach = get_approx_achieved_diff(share_hash);
+	if (ach < 1.0L) return;
+	uint64_t ach_u = (ach >= (long double)UINT64_MAX) ? UINT64_MAX : (uint64_t)ach;
+	if (ach_u > m->best_share_diff) {
+		m->best_share_diff = ach_u;
+	}
+	uint64_t prev = __atomic_load_n(&stratum_best_share_diff, __ATOMIC_RELAXED);
+	while (ach_u > prev) {
+		if (__atomic_compare_exchange_n(&stratum_best_share_diff, &prev, ach_u, false, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {
+			const char *u = (username && username[0]) ? username : (m->last_auth_username[0] ? m->last_auth_username : "?");
+			snprintf(stratum_best_share_user, sizeof(stratum_best_share_user), "%s", u);
+			DLOG_INFO("New best share diff ~%" PRIu64 " (pot %u) from %s", ach_u, (unsigned)floorPoT(ach_u), stratum_best_share_user);
+			stratum_best_share_save(ach_u, stratum_best_share_user);
+			break;
+		}
 	}
 }
 
@@ -1354,7 +1411,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 		
 		if (job->is_datum_job) {
 			// submit via DATUM
-			datum_protocol_pow_submit(c, job, username_s, was_block, empty_work, quickdiff, block_header, job_diff, full_cb_txn, cb, extranonce_bin, coinbase_index);
+			datum_protocol_pow_submit(c, job, username_s, was_block, empty_work, quickdiff, block_header, job_diff, full_cb_txn, cb, extranonce_bin, coinbase_index, share_hash);
 		}
 	}
 	
@@ -1424,7 +1481,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	if (!was_block) {
 		if (job->is_datum_job) {
 			// submit via DATUM
-			datum_protocol_pow_submit(c, job, username_s, was_block, empty_work, quickdiff, block_header, job_diff, full_cb_txn, cb, extranonce_bin, coinbase_index);
+			datum_protocol_pow_submit(c, job, username_s, was_block, empty_work, quickdiff, block_header, job_diff, full_cb_txn, cb, extranonce_bin, coinbase_index, share_hash);
 		}
 	}
 	
@@ -1435,7 +1492,8 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	
 	// update connection and gateway-local totals
 	stratum_note_share(m, true, job_diff);
-	
+	stratum_note_best_share(m, share_hash, username_s);
+
 	// update since-snap totals
 	m->share_count_since_snap++;
 	m->share_diff_since_snap += job_diff;

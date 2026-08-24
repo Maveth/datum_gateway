@@ -93,6 +93,19 @@ static void datum_api_format_share_counts(char *buffer, size_t buffer_size, uint
 	snprintf(buffer, buffer_size, "%llu  (%llu diff)", (unsigned long long)count, (unsigned long long)diff);
 }
 
+
+void datum_api_var_STRATUM_BEST_SHARE(char *buffer, size_t buffer_size, const T_DATUM_API_DASH_VARS *vardata) {
+	(void)vardata;
+	uint64_t best = __atomic_load_n(&stratum_best_share_diff, __ATOMIC_RELAXED);
+	if (!best) {
+		snprintf(buffer, buffer_size, "none yet");
+		return;
+	}
+	snprintf(buffer, buffer_size, "diff ~%" PRIu64 " (2^%u)%s%s",
+		best, (unsigned)floorPoT(best),
+		stratum_best_share_user[0] ? " · " : "",
+		stratum_best_share_user[0] ? stratum_best_share_user : "");
+}
 void datum_api_var_STRATUM_SHARES_ACCEPTED(char *buffer, size_t buffer_size, const T_DATUM_API_DASH_VARS *vardata) {
 	(void)vardata;
 	datum_api_format_share_counts(buffer, buffer_size,
@@ -252,7 +265,8 @@ void datum_api_var_STRATUM_JOB_TXNCOUNT(char *buffer, size_t buffer_size, const 
 }
 
 DATUM_API_VarEntry var_entries[] = {
-	{"STRATUM_SHARES_ACCEPTED", datum_api_var_STRATUM_SHARES_ACCEPTED},
+	{"STRATUM_BEST_SHARE", datum_api_var_STRATUM_BEST_SHARE},
+{"STRATUM_SHARES_ACCEPTED", datum_api_var_STRATUM_SHARES_ACCEPTED},
 	{"STRATUM_SHARES_REJECTED", datum_api_var_STRATUM_SHARES_REJECTED},
 	{"DATUM_SHARES_ACCEPTED", datum_api_var_DATUM_SHARES_ACCEPTED},
 	{"DATUM_SHARES_REJECTED", datum_api_var_DATUM_SHARES_REJECTED},
@@ -917,7 +931,7 @@ int datum_api_client_dashboard(struct MHD_Connection *connection) {
 		return MHD_YES;
 	}
 	
-	sz += snprintf(&output[sz], max_sz-1-sz, "<form action='/cmd' method='post'><input type='hidden' name='csrf' value='%s' /><TABLE><TR><TD><U>TID/CID</U></TD>  <TD><U>RemHost</U></TD>  <TD><U>Auth Username</U></TD> <TD><U>Subbed</U></TD> <TD><U>Last Accepted</U></TD> <TD><U>VDiff</U></TD> <TD><U>DiffA (A)</U></TD> <TD><U>DiffR (R)</U></TD> <TD><U>Hashrate (age)</U></TD> <TD><U>Coinbase</U></TD> <TD><U>UserAgent</U> </TD><TD><U>Command</U></TD></TR>", datum_config.api_csrf_token);
+	sz += snprintf(&output[sz], max_sz-1-sz, "<form action='/cmd' method='post'><input type='hidden' name='csrf' value='%s' /><TABLE><TR><TD><U>TID/CID</U></TD>  <TD><U>RemHost</U></TD>  <TD><U>Auth Username</U></TD> <TD><U>Subbed</U></TD> <TD><U>Last Accepted</U></TD> <TD><U>VDiff</U></TD> <TD><U>Best Diff</U></TD> <TD><U>DiffA (A)</U></TD> <TD><U>DiffR (R)</U></TD> <TD><U>Hashrate (age)</U></TD> <TD><U>Coinbase</U></TD> <TD><U>UserAgent</U> </TD><TD><U>Command</U></TD></TR>", datum_config.api_csrf_token);
 	
 	for (j = 0; j < max_threads; ++j) {
 		for(ii=0;ii<global_stratum_app->max_clients_thread;ii++) {
@@ -941,6 +955,7 @@ int datum_api_client_dashboard(struct MHD_Connection *connection) {
 					}
 					
 					sz += snprintf(&output[sz], max_sz-1-sz, "<TD>%"PRIu64"</TD>", m->current_diff);
+sz += snprintf(&output[sz], max_sz-1-sz, "<TD>%"PRIu64"</TD>", m->best_share_diff);
 					sz += snprintf(&output[sz], max_sz-1-sz, "<TD>%"PRIu64" (%"PRIu64")</TD>", m->share_diff_accepted, m->share_count_accepted);
 					
 					hr = 0.0;

@@ -260,6 +260,9 @@ typedef struct {
 	
 	uint64_t share_diff_accepted;
 	uint64_t share_count_accepted;
+
+	/* Highest approx Diff1 difficulty on an accepted share (telemetry). */
+	uint64_t best_share_diff;
 	
 	uint64_t share_diff_rejected;
 	uint64_t share_count_rejected;
@@ -284,6 +287,9 @@ typedef struct {
 	
 	T_DATUM_STRATUM_THREADPOOL_DATA *sdata;
 } T_DATUM_MINER_DATA;
+
+extern uint64_t stratum_best_share_diff;
+extern char stratum_best_share_user[192];
 
 extern int global_latest_stratum_job_index;
 extern pthread_rwlock_t stratum_global_job_ptr_lock;

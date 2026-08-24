@@ -1274,6 +1274,27 @@ void datum_protocol_pow_queue_submits(void) {
 	datum_queue_process(&pow_queue);
 }
 
+static unsigned char datum_protocol_claim_target_pot(
+	const T_DATUM_STRATUM_JOB *job,
+	const uint64_t target_diff,
+	const unsigned char *full_cb_tx,
+	const unsigned char *share_hash)
+{
+	(void)share_hash; /* actual Diff1 approx is telemetry-only (best share); not for TargetPOT */
+	/* Classic stamps assigned PoT into coinbase; Blake/V2 leaves 0xFF to keep
+	 * frozen pow_v2_merkle intact. Always send assigned PoT on the protocol wire. */
+	unsigned char pot = full_cb_tx[job->target_pot_index];
+	unsigned char assigned_pot = floorPoT(target_diff ? target_diff : 1);
+	if (pot == 0xFF || job->pow_v2_ready) {
+		pot = assigned_pot;
+	}
+	/* Never below assigned (share already validated against assigned target). */
+	if (assigned_pot > pot) {
+		pot = assigned_pot;
+	}
+	return pot;
+}
+
 int datum_protocol_pow_submit(
 	const T_DATUM_CLIENT_DATA *c,
 	const T_DATUM_STRATUM_JOB *job,
@@ -1286,11 +1307,12 @@ int datum_protocol_pow_submit(
 	const unsigned char *full_cb_tx,
 	const T_DATUM_STRATUM_COINBASE *cb,
 	unsigned char *extranonce,
-	unsigned char coinbase_index)
+	unsigned char coinbase_index,
+	const unsigned char *share_hash)
 {
 	// called by other threads to submit new POW
 	T_DATUM_PROTOCOL_POW pow;
-	
+
 	pow.datum_job_id = job->datum_job_idx;
 	memcpy(pow.extranonce, extranonce, 12);
 	strncpy(pow.username, username, 383);
@@ -1299,14 +1321,20 @@ int datum_protocol_pow_submit(
 	pow.subsidy_only = subsidy_only;
 	pow.is_block = was_block;
 	pow.quickdiff = quickdiff;
-	pow.target_byte_index = job->target_pot_index; // just a sanity check on the server side. server hunts for this in the correct place anyway.
-	pow.target_byte = full_cb_tx[job->target_pot_index];
+	pow.target_byte_index = job->target_pot_index; // sanity check on server; hunts correct place anyway
+	/* Do NOT mutate V2 coinbase PoT (breaks frozen merkle). Stamp protocol only. */
+	pow.target_byte = datum_protocol_claim_target_pot(job, target_diff, full_cb_tx, share_hash);
 	pow.ntime = upk_u32le(block_header, 68);
 	pow.nonce = upk_u32le(block_header, 76);
 	pow.version = upk_u32le(block_header, 0);
-	
-	//DLOG_DEBUG("ADD: DATUM POW: time %d nonce %8.8X", pow.ntime, pow.nonce);
-	
+	if (share_hash) {
+		memcpy(pow.share_hash, share_hash, 32);
+		pow.has_share_hash = true;
+	} else {
+		memset(pow.share_hash, 0, 32);
+		pow.has_share_hash = false;
+	}
+
 	return datum_queue_add_item(&pow_queue, &pow);
 }
 

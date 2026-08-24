@@ -113,6 +113,8 @@ typedef struct {
 	uint32_t ntime;
 	uint32_t nonce;
 	uint32_t version;
+	unsigned char share_hash[32];
+	bool has_share_hash;
 } T_DATUM_PROTOCOL_POW;
 
 int datum_protocol_init(void);
@@ -133,7 +135,8 @@ int datum_protocol_pow_submit(
 	const unsigned char *full_cb_tx,
 	const T_DATUM_STRATUM_COINBASE *cb,
 	unsigned char *extranonce,
-	unsigned char coinbase_index
+	unsigned char coinbase_index,
+	const unsigned char *share_hash
 );
 
 bool datum_protocol_thread_is_active(void);
@@ -144,6 +147,10 @@ extern uint64_t datum_accepted_share_count;
 extern uint64_t datum_accepted_share_diff;
 extern uint64_t datum_rejected_share_count;
 extern uint64_t datum_rejected_share_diff;
+
+/* Gateway best-share telemetry (datum_stratum.c) */
+extern uint64_t stratum_best_share_diff;
+extern char stratum_best_share_user[192];
 
 #define DATUM_REJECT_BAD_JOB_ID 10
 #define DATUM_REJECT_BAD_COINBASE_ID 11
