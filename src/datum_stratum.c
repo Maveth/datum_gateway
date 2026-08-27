@@ -2317,8 +2317,12 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	} else {
 		if (datum_config.mining_blake2b_headline[0] &&
 		    datum_config.mining_blake2b_headline_height <= 0) {
-			DLOG_WARN("bip110: mining.blake2b_headline set but blake2b_headline_height=0 — "
-			          "ignoring config fallback (set height for RC3/mainnet one-off)");
+			static int warned_headline_height;
+			if (!warned_headline_height) {
+				warned_headline_height = 1;
+				DLOG_WARN("bip110: mining.blake2b_headline set but blake2b_headline_height=0 — "
+				          "ignoring config fallback (set height for RC3/mainnet one-off)");
+			}
 		}
 		datum_bip110_set_headline(NULL, 0);
 	}
