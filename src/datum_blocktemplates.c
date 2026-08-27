@@ -347,8 +347,28 @@ T_DATUM_TEMPLATE_DATA *datum_gbt_parser(json_t *gbt) {
 	} else {
 		want_blake2b = datum_gbt_rules_want_blake2b(gbt);
 		jval = json_object_get(gbt, "coinbaseaux");
-		if (!want_blake2b && json_is_object(jval) && json_object_get(jval, "blake2b_headline")) {
-			want_blake2b = true;
+		tdata->blake2b_headline_len = 0;
+		tdata->blake2b_headline_hex[0] = 0;
+		if (json_is_object(jval)) {
+			json_t *hl = json_object_get(jval, "blake2b_headline");
+			if (hl && json_is_string(hl)) {
+				const char *hs = json_string_value(hl);
+				size_t hlen = hs ? strlen(hs) : 0;
+				size_t ii;
+				if (!want_blake2b) want_blake2b = true;
+				if (hlen > 0 && (hlen & 1) == 0 && hlen <= 256) {
+					strncpy(tdata->blake2b_headline_hex, hs, sizeof(tdata->blake2b_headline_hex) - 1);
+					tdata->blake2b_headline_hex[sizeof(tdata->blake2b_headline_hex) - 1] = 0;
+					tdata->blake2b_headline_len = (uint16_t)(hlen >> 1);
+					if (tdata->blake2b_headline_len > sizeof(tdata->blake2b_headline_bin)) {
+						tdata->blake2b_headline_len = sizeof(tdata->blake2b_headline_bin);
+					}
+					for (ii = 0; ii < tdata->blake2b_headline_len; ii++) {
+						tdata->blake2b_headline_bin[ii] = hex2bin_uchar(&hs[ii << 1]);
+					}
+					DLOG_INFO("bip110: GBT coinbaseaux blake2b_headline (%u bytes)", (unsigned)tdata->blake2b_headline_len);
+				}
+			}
 		}
 		if (tdata->version & 0x80000000) {
 			want_blake2b = true;

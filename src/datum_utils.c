@@ -472,13 +472,15 @@ int output_script_2_addr(const unsigned char *script, const int len, char *addr)
 		return i;
 	}
 	
+	/* BIP110 lab: display addresses as testnet/TN4 (m/n/2), not mainnet (1/3).
+	 * Scripts themselves are network-agnostic; only the UI base58 version byte differs. */
 	if ((script[0] == 0xA9) || (script[0] == 0x76)) { // P2SH / P2PKH
 		if (script[0] == 0xA9) {
-			version = 5;
+			version = 0xC4; /* testnet P2SH */
 			ptr = &script[2];
 			if (len != 23) return 0;
 		} else {
-			version = 0;
+			version = 0x6F; /* testnet/TN4 P2PKH */
 			ptr = &script[3];
 			if (len != 25) return 0;
 		}
@@ -514,7 +516,7 @@ int output_script_2_addr(const unsigned char *script, const int len, char *addr)
 		version = (script[0] == 0x00) ? 0 : script[0] - 0x50;
 		programLen = script[1];
 		
-		if (segwit_addr_encode(addr, "bc", version, &script[2], programLen) != 1) {
+		if (segwit_addr_encode(addr, "tb", version, &script[2], programLen) != 1) {
 			i = sprintf(addr, "UNKNOWN");
 			return i;
 		}

@@ -127,6 +127,10 @@ typedef struct {
 	char mining_pool_address[256];
 	char mining_coinbase_tag_primary[64];
 	char mining_coinbase_tag_secondary[64];
+	/* Consensus news-headline for Blake2b *fork-start* coinbase only (see blake2b_headline_height). */
+	char mining_blake2b_headline[256];
+	/* Job height that may inject mining.blake2b_headline when GBT aux omits it. 0 = GBT-aux only. */
+	int mining_blake2b_headline_height;
 	char mining_save_submitblocks_dir[256];
 	bool mining_allow_hasher_time_rolling;
 	char mining_pow_algorithm[16];

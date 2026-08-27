@@ -60,6 +60,20 @@ const char *cbstart_hex = "01000000010000000000000000000000000000000000000000000
 
 #define MAX_COINBASE_TAG_SPACE 86 // leaves space for BIP34 height, extranonces, datum prime tag, etc.
 
+/* Set from GBT aux / mining.blake2b_headline — must appear in activation coinbase */
+static uint8_t bip110_headline_bin[256];
+static uint16_t bip110_headline_len = 0;
+
+void datum_bip110_set_headline(const uint8_t *b, uint16_t n)
+{
+	if (!b || n == 0 || n > sizeof(bip110_headline_bin)) {
+		bip110_headline_len = 0;
+		return;
+	}
+	memcpy(bip110_headline_bin, b, n);
+	bip110_headline_len = n;
+}
+
 int generate_coinbase_input(int height, char *cb, int *target_pot_index) {
 	int cb_input_sz = 0;
 	int tag_len[2] = { 0, 0 };
@@ -67,9 +81,20 @@ int generate_coinbase_input(int height, char *cb, int *target_pot_index) {
 	int excess;
 	bool datum_active = false;
 	
-	// let's figure out our coinbase tags w/BIP34 height
-	i = append_UNum_hex(height, &cb[0]);
-	cb_input_sz += i>>1;
+	// BIP34: match CScript()<<nHeight (OP_0 / OP_1..OP_16 / push).
+	// Heights 1..16 fail with plain append_UNum_hex (0101 vs OP_1).
+	if (height == 0) {
+		uchar_to_hex(&cb[0], 0x00);
+		i = 2;
+		cb_input_sz += 1;
+	} else if (height >= 1 && height <= 16) {
+		uchar_to_hex(&cb[0], (unsigned char)(0x50 + height));
+		i = 2;
+		cb_input_sz += 1;
+	} else {
+		i = append_UNum_hex((uint64_t)height, &cb[0]);
+		cb_input_sz += i>>1;
+	}
 	
 	datum_active = datum_protocol_is_active();
 	
@@ -177,7 +202,20 @@ int generate_coinbase_input(int height, char *cb, int *target_pot_index) {
 		uchar_to_hex(&cb[i], ((datum_config.prime_id>>16)&0xFF)); i+=2; cb_input_sz++;
 		uchar_to_hex(&cb[i], ((datum_config.prime_id>>24)&0xFF)); i+=2; cb_input_sz++;
 	}
-	
+
+	/* Consensus: Blake2b activation coinbase must contain headline bytes (any length ≤255). */
+	if (bip110_headline_len > 0 && bip110_headline_len <= 255) {
+		if (bip110_headline_len <= 75) {
+			uchar_to_hex(&cb[i], (unsigned char)bip110_headline_len); i += 2; cb_input_sz++;
+		} else {
+			uchar_to_hex(&cb[i], 0x4C); i += 2; cb_input_sz++;
+			uchar_to_hex(&cb[i], (unsigned char)bip110_headline_len); i += 2; cb_input_sz++;
+		}
+		for (m = 0; m < bip110_headline_len; m++) {
+			uchar_to_hex(&cb[i], bip110_headline_bin[m]); i += 2; cb_input_sz++;
+		}
+	}
+
 	return cb_input_sz;
 }
 

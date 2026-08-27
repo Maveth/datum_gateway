@@ -2277,8 +2277,10 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	}
 	s->prevhash[64] = 0;
 	
-	snprintf(s->version, sizeof(s->version), "%8.8x", block_template->version);
-	s->version_uint = block_template->version;
+	/* Stratum/Sia miners expect classic version hex. Keep 0x80000000 out of the
+	 * wire field; GetHash / Blake H1 still OR it back. BIP9 bit4 (0x10) set for lab. */
+	s->version_uint = ((uint32_t)block_template->version & 0x7fffffffu) | 0x10u;
+	snprintf(s->version, sizeof(s->version), "%8.8x", (unsigned)s->version_uint);
 	strncpy(s->nbits, block_template->bits, sizeof(s->nbits) - 1);
 	
 	// TODO: Should we use local time, and just verify is valid for the block?
@@ -2299,6 +2301,27 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	// Set the coinbase value of this job based on the template
 	s->coinbase_value = block_template->coinbasevalue;
 	s->height = block_template->height;
+	/* News-headline TAG: fork-start / first Blake2b block ONLY, then normal tags.
+	 * Prefer GBT aux (node already height-gates). Config fallback only at blake2b_headline_height. */
+	if (block_template->blake2b_headline_len) {
+		datum_bip110_set_headline(block_template->blake2b_headline_bin, block_template->blake2b_headline_len);
+		DLOG_INFO("bip110: headline from GBT aux height=%lu (%u bytes)",
+		          (unsigned long)s->height, (unsigned)block_template->blake2b_headline_len);
+	} else if (datum_config.mining_blake2b_headline[0] &&
+	           datum_config.mining_blake2b_headline_height > 0 &&
+	           (int)s->height == datum_config.mining_blake2b_headline_height) {
+		datum_bip110_set_headline((const uint8_t *)datum_config.mining_blake2b_headline,
+		                         (uint16_t)strlen(datum_config.mining_blake2b_headline));
+		DLOG_INFO("bip110: headline ONE-OFF from config at fork-start height=%lu",
+		          (unsigned long)s->height);
+	} else {
+		if (datum_config.mining_blake2b_headline[0] &&
+		    datum_config.mining_blake2b_headline_height <= 0) {
+			DLOG_WARN("bip110: mining.blake2b_headline set but blake2b_headline_height=0 — "
+			          "ignoring config fallback (set height for RC3/mainnet one-off)");
+		}
+		datum_bip110_set_headline(NULL, 0);
+	}
 	s->block_template = block_template;
 	
 	// stash useful binary versions of prevblockhash and nbits

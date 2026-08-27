@@ -173,6 +173,11 @@ typedef struct {
 	char		block_target_hex[72]; //
 	uint8_t		block_target[32]; // calculated from bits
 
+	/* BIP-110 / pow_hf_blake2b: first Blake2b block coinbase must contain this */
+	char		blake2b_headline_hex[260];
+	uint8_t		blake2b_headline_bin[128];
+	uint16_t	blake2b_headline_len;
+
 	uint32_t	header_version; // 0 = SHA256d / BIP22; 2 = Knots header-v2 / BLAKE2b
 	uint32_t	header_transaction_count; //
 	uint8_t		header_flags; //
