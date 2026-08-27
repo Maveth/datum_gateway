@@ -2277,10 +2277,10 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	}
 	s->prevhash[64] = 0;
 	
-	/* Stratum/Sia miners expect classic version hex. Keep 0x80000000 out of the
-	 * wire field; GetHash / Blake H1 still OR it back. BIP9 bit4 (0x10) set for lab. */
-	s->version_uint = ((uint32_t)block_template->version & 0x7fffffffu) | 0x10u;
-	snprintf(s->version, sizeof(s->version), "%8.8x", (unsigned)s->version_uint);
+	/* Match InnerHat: use template version as-is. Forcing BIP9 bit4 (0x10) caused
+	 * Knots submitblock high-hash (H1/commitment vs node GetHash mismatch). */
+	snprintf(s->version, sizeof(s->version), "%8.8x", block_template->version);
+	s->version_uint = block_template->version;
 	strncpy(s->nbits, block_template->bits, sizeof(s->nbits) - 1);
 	
 	// TODO: Should we use local time, and just verify is valid for the block?
