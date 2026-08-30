@@ -1169,6 +1169,12 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	
 	if (empty_work) {
 		cb = &job->subsidy_only_coinbase;
+	} else if (blake2b_job) {
+		/* Assemble the same CB Blake commitment/notify used (Prime split when present). */
+		cb = datum_stratum_payout_coinbase(job);
+		if (!cb) {
+			cb = &job->coinbase[coinbase_index];
+		}
 	} else {
 		cb = &job->coinbase[coinbase_index];
 	}
@@ -1690,7 +1696,15 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 	// coinbase selection is tacked on to the job ID
 	// prepending a Q means it's a duplicate job, but with a new diff (needed per stratum protocol "spec")
 	// prepending an N means this is an empty (subsidy-only) block with a small coinbase and has coinbase ID 255/0xff
-	if (new_block || stratum_job_is_blake2b(j)) {
+	if (stratum_job_is_blake2b(j)) {
+		/* Do not force type-0 empty when Prime sent a multi-out split. */
+		if (full_coinbase && j->available_coinbase_outputs_count > 0) {
+			(void)datum_stratum_payout_coinbase(j);
+			cbselect = (j->payout_cb_index == 255) ? 0 : j->payout_cb_index;
+		} else {
+			cbselect = 0;
+		}
+	} else if (new_block) {
 		cbselect = 0;
 	} else {
 		if (full_coinbase) {
@@ -2199,14 +2213,38 @@ bool datum_stratum_job_blake2b_commitment_from_txn(const T_DATUM_STRATUM_JOB *s,
 		td->xor_key, td->merge_mining_rhs);
 }
 
+
+T_DATUM_STRATUM_COINBASE *datum_stratum_payout_coinbase(T_DATUM_STRATUM_JOB *s)
+{
+	/* Prefer multi-out stratum types that fit Prime coinbaser outs; type 0 is
+	 * empty/single pool-addr and must not win when a real split exists. */
+	static const int prefer[] = { 4, 3, 5, 1, 2, 0 };
+	int i, idx;
+
+	if (!s) {
+		return NULL;
+	}
+	if (s->available_coinbase_outputs_count > 0) {
+		for (i = 0; i < (int)(sizeof(prefer) / sizeof(prefer[0])); i++) {
+			idx = prefer[i];
+			if (s->coinbase[idx].coinb1_len > 0 && s->coinbase[idx].coinb2_len > 0) {
+				s->payout_cb_index = (unsigned char)idx;
+				return &s->coinbase[idx];
+			}
+		}
+	}
+	s->payout_cb_index = 255;
+	return &s->subsidy_only_coinbase;
+}
+
 bool datum_stratum_job_blake2b_commitment(T_DATUM_STRATUM_JOB *s, unsigned char pot, unsigned char *commitment, unsigned char *sia_coinb1) {
 	unsigned char cb_txn[MAX_COINBASE_TXN_SIZE_BYTES];
 	const T_DATUM_STRATUM_COINBASE *cb;
 	size_t cb_len;
 	
 	if (!s || !commitment) return false;
-	cb = &s->coinbase[0];
-	if (cb->coinb1_len < 1) return false;
+	cb = datum_stratum_payout_coinbase(s);
+	if (!cb || cb->coinb1_len < 1) return false;
 	cb_len = (size_t)cb->coinb1_len + 12 + (size_t)cb->coinb2_len;
 	if (cb_len > sizeof(cb_txn)) return false;
 	memcpy(cb_txn, cb->coinb1_bin, cb->coinb1_len);
@@ -2317,9 +2355,33 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	
 	// start as not a datum job.  if we have coinbase data and such for it down the line, this will get updated.
 	s->is_datum_job = false;
-	
+	s->payout_cb_index = 255;
+
+	/* Pool mode: keep last Prime payout split across job refreshes (memset wiped it).
+	 * Still refresh via need_coinbaser; until then freeze/mine with carried outs. */
+	if (datum_protocol_is_active()) {
+		T_DATUM_STRATUM_JOB *prev = NULL;
+		pthread_rwlock_rdlock(&stratum_global_job_ptr_lock);
+		if (global_latest_stratum_job_index >= 0 && global_latest_stratum_job_index < MAX_STRATUM_JOBS) {
+			prev = global_cur_stratum_jobs[global_latest_stratum_job_index];
+		}
+		if (prev && prev->available_coinbase_outputs_count > 0) {
+			int n = prev->available_coinbase_outputs_count;
+			if (n > (int)(sizeof(s->available_coinbase_outputs) / sizeof(s->available_coinbase_outputs[0]))) {
+				n = (int)(sizeof(s->available_coinbase_outputs) / sizeof(s->available_coinbase_outputs[0]));
+			}
+			s->available_coinbase_outputs_count = n;
+			memcpy(s->available_coinbase_outputs, prev->available_coinbase_outputs,
+			       (size_t)n * sizeof(s->available_coinbase_outputs[0]));
+		}
+		pthread_rwlock_unlock(&stratum_global_job_ptr_lock);
+	}
+
 	// prep the coinbase txn(s) for this job
 	generate_base_coinbase_txns_for_stratum_job(s, s->is_new_block);
+	if (s->available_coinbase_outputs_count > 0) {
+		generate_coinbase_txns_for_stratum_job(s, false);
+	}
 	
 	s->job_state = job_state;
 	if ((job_state == JOB_STATE_FULL_PRIORITY_WAIT_COINBASER) || (job_state == JOB_STATE_FULL_NORMAL_WAIT_COINBASER)) {
