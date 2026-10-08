@@ -88,6 +88,10 @@ int datum_protocol_abw_activation(int len, unsigned char *data);
 int datum_protocol_abw_assignment_notice(int len, unsigned char *data);
 int datum_protocol_abw_reveal(int len, unsigned char *data);
 
+int datum_protocol_coinbaser_try_reuse(T_DATUM_STRATUM_JOB *s);
+void datum_protocol_coinbaser_save_good(T_DATUM_STRATUM_JOB *s, int n);
+void datum_protocol_coinbaser_reuse_reset(void);
+
 int datum_protocol_mining_cmd(void *data, int len);
 int datum_protocol_client_configure(int len, unsigned char *data);
 int datum_protocol_send_hello(int sockfd);

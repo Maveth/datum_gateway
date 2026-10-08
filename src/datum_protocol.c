@@ -1339,6 +1339,93 @@ int datum_protocol_coinbaser_fetch_response(int len, unsigned char *data) {
 	return 1;
 }
 
+/* Last successful multi-out coinbaser.
+ * Same tip and same value: exact reuse.
+ * Same tip with a new value, or a new tip: stretch the last list onto the
+ * job's coinbase value so miners are not left on an empty split. */
+static T_DATUM_TXN_OUTPUT datum_last_good_cb_outs[512];
+static int datum_last_good_cb_count = 0;
+static unsigned char datum_last_good_prevhash[32];
+static uint64_t datum_last_good_cb_value = 0;
+static pthread_mutex_t datum_last_good_cb_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+#define DATUM_COINBASER_FAST_WAIT_NS 500000000L /* 500ms */
+
+int datum_protocol_coinbaser_try_reuse(T_DATUM_STRATUM_JOB *s) {
+	int n = 0;
+	int i;
+	bool same_tip = false;
+	uint64_t old_value = 0;
+	uint64_t new_value = 0;
+	uint64_t total = 0;
+	uint64_t assigned = 0;
+	if (!s) return 0;
+	new_value = s->coinbase_value;
+	pthread_mutex_lock(&datum_last_good_cb_mutex);
+	if (datum_last_good_cb_count >= 2) {
+		same_tip = (memcmp(datum_last_good_prevhash, s->prevhash_bin, 32) == 0);
+		old_value = datum_last_good_cb_value;
+		memcpy(s->available_coinbase_outputs, datum_last_good_cb_outs,
+		       sizeof(T_DATUM_TXN_OUTPUT) * (size_t)datum_last_good_cb_count);
+		s->available_coinbase_outputs_count = datum_last_good_cb_count;
+		n = datum_last_good_cb_count;
+	}
+	pthread_mutex_unlock(&datum_last_good_cb_mutex);
+	if (n < 2) return 0;
+
+	if (same_tip && old_value != 0 && old_value == new_value) {
+		DLOG_INFO("Coinbaser miss: reusing last good multi-out (%d outs) for same prevhash", n);
+		return n;
+	}
+
+	if (new_value == 0) {
+		s->available_coinbase_outputs_count = 0;
+		return 0;
+	}
+	for (i = 0; i < n; i++) {
+		total += s->available_coinbase_outputs[i].value_sats;
+	}
+	if (total == 0) {
+		s->available_coinbase_outputs_count = 0;
+		return 0;
+	}
+	if (total != new_value) {
+		assigned = 0;
+		for (i = 0; i < n; i++) {
+			uint64_t scaled = (s->available_coinbase_outputs[i].value_sats * new_value) / total;
+			s->available_coinbase_outputs[i].value_sats = scaled;
+			assigned += scaled;
+		}
+		if (assigned < new_value) {
+			s->available_coinbase_outputs[n - 1].value_sats += (new_value - assigned);
+		}
+	}
+	DLOG_INFO("Coinbaser miss: %s multi-out (%d outs) old_value=%" PRIu64 " → %" PRIu64,
+		same_tip ? "rescaling same-tip" : "cross-tip rescale",
+		n, old_value, new_value);
+	return n;
+}
+
+void datum_protocol_coinbaser_save_good(T_DATUM_STRATUM_JOB *s, int n) {
+	if (!s || n < 2) return;
+	pthread_mutex_lock(&datum_last_good_cb_mutex);
+	memcpy(datum_last_good_cb_outs, s->available_coinbase_outputs,
+	       sizeof(T_DATUM_TXN_OUTPUT) * (size_t)n);
+	datum_last_good_cb_count = n;
+	memcpy(datum_last_good_prevhash, s->prevhash_bin, 32);
+	datum_last_good_cb_value = s->coinbase_value;
+	pthread_mutex_unlock(&datum_last_good_cb_mutex);
+}
+
+void datum_protocol_coinbaser_reuse_reset(void) {
+	pthread_mutex_lock(&datum_last_good_cb_mutex);
+	datum_last_good_cb_count = 0;
+	datum_last_good_cb_value = 0;
+	memset(datum_last_good_prevhash, 0, sizeof(datum_last_good_prevhash));
+	memset(datum_last_good_cb_outs, 0, sizeof(datum_last_good_cb_outs));
+	pthread_mutex_unlock(&datum_last_good_cb_mutex);
+}
+
 int datum_protocol_coinbaser_fetch(void *sptr) {
 	// Called by the coinbaser thread to request a coinbase split
 	// The coinbaser thread expects this to actually result in a processed coinbase split, so we need to churn
@@ -1374,35 +1461,77 @@ int datum_protocol_coinbaser_fetch(void *sptr) {
 	if (datum_protocol_client_active != 3) {
 		return 0;
 	}
-	
-	if (datum_protocol_mining_cmd_for_session(
-		msg, i, session_generation) != 0) return 0;
-	
-	// spin here for up to 5 seconds while awaiting a coinbaser response from the DATUM server
-	clock_gettime(CLOCK_REALTIME, &ts);
-	ts.tv_sec += 5; // Set timeout to 5 seconds
-	
+
+	/* 500ms for a live answer. If we already have a multi-out list, publish
+	 * a stretched copy then. Otherwise keep the upstream 5s wait. */
+	struct timespec ts_fast;
+	struct timespec ts_full;
+	bool in_fast_wait = true;
+	clock_gettime(CLOCK_REALTIME, &ts_full);
+	ts_fast = ts_full;
+	ts_fast.tv_nsec += DATUM_COINBASER_FAST_WAIT_NS;
+	if (ts_fast.tv_nsec >= 1000000000L) {
+		ts_fast.tv_sec += 1;
+		ts_fast.tv_nsec -= 1000000000L;
+	}
+	ts_full.tv_sec += 5;
+	ts = ts_fast;
+
+	/* Lock before send so a fast 0x11 cannot signal before timedwait. */
 	pthread_mutex_lock(&datum_protocol_coinbaser_fetch_mutex);
-	
-	rc = pthread_cond_timedwait(&datum_protocol_coinbaser_fetch_cond, &datum_protocol_coinbaser_fetch_mutex, &ts);
-	if (rc == ETIMEDOUT) {
-		pthread_mutex_unlock(&datum_protocol_coinbaser_fetch_mutex);
-		DLOG_DEBUG("Timeout waiting for coinbaser response from DATUM server");
-		return 0;
-	}
-	
-	if (rc != 0) {
-		DLOG_DEBUG("Error waiting for coinbaser response from DATUM server");
+	datum_coinbaser_v2_response = NULL;
+	datum_coinbaser_v2_response_value[0] = 0;
+	datum_coinbaser_v2_response_value[1] = 0;
+
+	if (datum_protocol_mining_cmd_for_session(
+		msg, i, session_generation) != 0) {
 		pthread_mutex_unlock(&datum_protocol_coinbaser_fetch_mutex);
 		return 0;
 	}
+
+	for (;;) {
+		if (datum_coinbaser_v2_response &&
+		    datum_coinbaser_v2_response_value[datum_coinbaser_v2_response_buf_idx] == value) {
+			break;
+		}
+		rc = pthread_cond_timedwait(&datum_protocol_coinbaser_fetch_cond, &datum_protocol_coinbaser_fetch_mutex, &ts);
+		if (rc == ETIMEDOUT) {
+			if (in_fast_wait) {
+				int seeded;
+				pthread_mutex_unlock(&datum_protocol_coinbaser_fetch_mutex);
+				seeded = datum_protocol_coinbaser_try_reuse(s);
+				if (seeded >= 2) {
+					DLOG_INFO("Coinbaser fast-wait miss: publishing provisional multi (%d outs)", seeded);
+					return seeded;
+				}
+				in_fast_wait = false;
+				ts = ts_full;
+				pthread_mutex_lock(&datum_protocol_coinbaser_fetch_mutex);
+				continue;
+			}
+			pthread_mutex_unlock(&datum_protocol_coinbaser_fetch_mutex);
+			DLOG_DEBUG("Timeout waiting for coinbaser response from DATUM server");
+			return datum_protocol_coinbaser_try_reuse(s);
+		}
+		if (rc != 0) {
+			DLOG_DEBUG("Error waiting for coinbaser response from DATUM server");
+			pthread_mutex_unlock(&datum_protocol_coinbaser_fetch_mutex);
+			return 0;
+		}
+	}
+
 	i = 0;
-	
-	// process received coinbase
 	if ((datum_coinbaser_v2_response) && (datum_coinbaser_v2_response_value[datum_coinbaser_v2_response_buf_idx] == value)) {
 		i = datum_coinbaser_v2_parse(s, datum_coinbaser_v2_response, datum_coinbaser_v2_response_len[datum_coinbaser_v2_response_buf_idx]);
+		if (i >= 2) {
+			datum_protocol_coinbaser_save_good(s, i);
+		}
 	}
-	
+	if (i < 2) {
+		int reused = datum_protocol_coinbaser_try_reuse(s);
+		if (reused >= 2) i = reused;
+	}
+
 	pthread_mutex_unlock(&datum_protocol_coinbaser_fetch_mutex);
 	return i;
 }

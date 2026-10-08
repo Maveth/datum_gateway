@@ -919,6 +919,76 @@ static void datum_protocol_resume_tests(void) {
 	datum_test(server_out_buf == buffered_before);
 }
 
+static void datum_coinbaser_reuse_same_tip_tests(void) {
+	T_DATUM_STRATUM_JOB job;
+	unsigned char tip_a[32];
+	unsigned char tip_b[32];
+	int i;
+	uint64_t sum;
+
+	memset(&job, 0, sizeof(job));
+	memset(tip_a, 0xaa, sizeof(tip_a));
+	memset(tip_b, 0xbb, sizeof(tip_b));
+	datum_protocol_coinbaser_reuse_reset();
+
+	memcpy(job.prevhash_bin, tip_a, 32);
+	job.coinbase_value = 3003;
+	datum_test(datum_protocol_coinbaser_try_reuse(&job) == 0);
+
+	job.available_coinbase_outputs_count = 1;
+	job.available_coinbase_outputs[0].value_sats = 100;
+	job.available_coinbase_outputs[0].output_script_len = 22;
+	job.coinbase_value = 100;
+	datum_protocol_coinbaser_save_good(&job, 1);
+	datum_test(datum_protocol_coinbaser_try_reuse(&job) == 0);
+
+	job.available_coinbase_outputs_count = 3;
+	for (i = 0; i < 3; i++) {
+		job.available_coinbase_outputs[i].value_sats = (uint64_t)(1000 + i);
+		job.available_coinbase_outputs[i].output_script_len = 22;
+		memset(job.available_coinbase_outputs[i].output_script, (unsigned char)(0x10 + i), 22);
+	}
+	memcpy(job.prevhash_bin, tip_a, 32);
+	job.coinbase_value = 3003;
+	datum_protocol_coinbaser_save_good(&job, 3);
+
+	memset(job.available_coinbase_outputs, 0, sizeof(job.available_coinbase_outputs));
+	job.available_coinbase_outputs_count = 0;
+	job.coinbase_value = 3003;
+	datum_test(datum_protocol_coinbaser_try_reuse(&job) == 3);
+	datum_test(job.available_coinbase_outputs_count == 3);
+	datum_test(job.available_coinbase_outputs[0].value_sats == 1000);
+	datum_test(job.available_coinbase_outputs[2].value_sats == 1002);
+
+	memcpy(job.prevhash_bin, tip_b, 32);
+	memset(job.available_coinbase_outputs, 0, sizeof(job.available_coinbase_outputs));
+	job.available_coinbase_outputs_count = 0;
+	job.coinbase_value = 6006;
+	datum_test(datum_protocol_coinbaser_try_reuse(&job) == 3);
+	datum_test(job.available_coinbase_outputs_count == 3);
+	sum = 0;
+	for (i = 0; i < 3; i++) sum += job.available_coinbase_outputs[i].value_sats;
+	datum_test(sum == 6006);
+	datum_test(job.available_coinbase_outputs[0].output_script[0] == 0x10);
+	datum_test(job.available_coinbase_outputs[2].output_script[0] == 0x12);
+
+	memcpy(job.prevhash_bin, tip_a, 32);
+	memset(job.available_coinbase_outputs, 0, sizeof(job.available_coinbase_outputs));
+	job.available_coinbase_outputs_count = 0;
+	job.coinbase_value = 4004;
+	datum_test(datum_protocol_coinbaser_try_reuse(&job) == 3);
+	sum = 0;
+	for (i = 0; i < 3; i++) sum += job.available_coinbase_outputs[i].value_sats;
+	datum_test(sum == 4004);
+
+	memcpy(job.prevhash_bin, tip_a, 32);
+	job.coinbase_value = 3003;
+	datum_protocol_coinbaser_reuse_reset();
+	datum_test(datum_protocol_coinbaser_try_reuse(&job) == 0);
+
+	datum_protocol_coinbaser_reuse_reset();
+}
+
 static void datum_protocol_migration_tests(void) {
 	global_config_t saved_config = datum_config;
 	unsigned char payload[192] = {0};
@@ -1452,6 +1522,7 @@ void datum_protocol_tests(void) {
 	datum_protocol_abw_activation_state_test();
 	datum_protocol_acceptance_watchdog_tests();
 	datum_protocol_config_v3_tests();
+	datum_coinbaser_reuse_same_tip_tests();
 	datum_protocol_migration_tests();
 	datum_protocol_bulk_tests();
 	datum_protocol_resume_tests();

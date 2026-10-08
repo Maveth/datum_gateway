@@ -865,7 +865,7 @@ void *datum_coinbaser_thread(void *ptr) {
 				s->available_coinbase_outputs_count = 0;
 				i = 0;
 			}
-			if (i>=0) {
+			if (i >= 2) {
 				DLOG_DEBUG("Generating coinbases for up to %d outputs", i);
 				generate_coinbase_txns_for_stratum_job(s, false);
 				if (need_coinbaser_rwlocks_init_done) {
@@ -875,6 +875,9 @@ void *datum_coinbaser_thread(void *ptr) {
 					need_coinbaser = false;
 				}
 				DLOG_DEBUG("Generated and notified.");
+			} else {
+				DLOG_WARN("Coinbaser miss/timeout with only %d outs — not publishing empty; will retry", i);
+				usleep(500000);
 			}
 		}
 		
