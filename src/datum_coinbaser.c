@@ -911,7 +911,13 @@ void *datum_coinbaser_thread(void *ptr) {
 				s->available_coinbase_outputs_count = 0;
 				i = 0;
 			}
-			if (i>=0) {
+			/* Pool mode only: a short list is not done. Ask again instead of
+			 * publishing the local one-output coinbase. Solo (pool link down)
+			 * keeps the stock path and publishes that one output. */
+			if (datum_protocol_is_active() && i < 2) {
+				DLOG_WARN("Coinbaser returned %d outputs (<2); not publishing one-output coinbase, will retry", i);
+				usleep(500000);
+			} else if (i>=0) {
 				DLOG_DEBUG("Generating coinbases for up to %d outputs", i);
 				generate_coinbase_txns_for_stratum_job(s, false);
 				if (__builtin_expect(atomic_load_explicit(&need_coinbaser_rwlocks_init_done, memory_order_acquire), 1)) {
