@@ -58,6 +58,7 @@
 #include "datum_coinbaser.h"
 #include "datum_submitblock.h"
 #include "datum_protocol.h"
+#include "datum_protocol_internal.h"
 #include "datum_pow.h"
 
 T_DATUM_SOCKET_APP *global_stratum_app = NULL;
@@ -1430,11 +1431,24 @@ int client_mining_authorize(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 unsigned int datum_stratum_coinbase_index(
 	const T_DATUM_STRATUM_THREADPOOL_DATA *sdata,
 	const T_DATUM_MINER_DATA *miner, bool new_block) {
-	if (new_block) return DATUM_COINBASE_ID_EMPTY;
-	if (!sdata || !miner || !sdata->cur_stratum_job ||
-	    sdata->cur_stratum_job->job_state < JOB_STATE_FULL_PRIORITY_WAIT_COINBASER ||
+	const T_DATUM_STRATUM_JOB *job = (sdata && sdata->cur_stratum_job) ? sdata->cur_stratum_job : NULL;
+	/* Slot 5 is the saved base list at the subsidy. Slot 4 is that list
+	 * stretched to the fee total. Both are filled only when reuse is on. */
+	const bool reused = datum_config.datum_coinbaser_reuse && job &&
+		job->available_coinbase_outputs_count >= 2 &&
+		job->coinbase[4].coinb1_len > 0 &&
+		job->coinbase[5].coinb1_len > 0;
+	if (new_block) {
+		if (reused) return 5;
+		return DATUM_COINBASE_ID_EMPTY;
+	}
+	if (!sdata || !miner || !job ||
+	    job->job_state < JOB_STATE_FULL_PRIORITY_WAIT_COINBASER ||
 	    !sdata->full_coinbase_ready ||
-	    miner->coinbase_selection >= MAX_COINBASE_TYPES) return 0;
+	    miner->coinbase_selection >= MAX_COINBASE_TYPES) {
+		if (reused) return 4;
+		return 0;
+	}
 	return miner->coinbase_selection;
 }
 
@@ -2038,6 +2052,27 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	
 	// prep the coinbase txn(s) for this job
 	generate_base_coinbase_txns_for_stratum_job(s, s->is_new_block);
+
+	/* datum.coinbaser_reuse is off by default. When on, and a base list has
+	 * been saved: the opening notify (slot 5) uses that list at the subsidy,
+	 * and the fee template (slot 4) uses it stretched to this job's total.
+	 * The pool's own answer still replaces the stretched copy on the later
+	 * job. No saved list leaves the one-output coinbase in place. */
+	if (datum_config.datum_coinbaser_reuse && s->is_new_block) {
+		const uint64_t fee_value = s->coinbase_value;
+		bool have_base = false;
+		s->coinbase_value = block_reward(s->height);
+		if (datum_protocol_coinbaser_try_reuse(s) >= 2) {
+			generate_coinbase_txns_for_stratum_job(s, false);
+			s->subsidy_only_coinbase = s->coinbase[4];
+			have_base = true;
+		}
+		s->coinbase_value = fee_value;
+		if (have_base && datum_protocol_coinbaser_try_reuse(s) >= 2) {
+			generate_coinbase_txns_for_stratum_job(s, false);
+			s->coinbase[5] = s->subsidy_only_coinbase;
+		}
+	}
 	
 	s->job_state = job_state;
 	if ((job_state == JOB_STATE_FULL_PRIORITY_WAIT_COINBASER) || (job_state == JOB_STATE_FULL_NORMAL_WAIT_COINBASER)) {
